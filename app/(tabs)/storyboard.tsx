@@ -40,7 +40,8 @@ export default function StoryboardScreen() {
       updateStoryboard(selectedSceneIndex, storyboardData);
       Alert.alert('Success!', 'Storyboard generated successfully!');
     } catch (error) {
-      Alert.alert('Error', error instanceof Error ? error.message : 'Failed to generate storyboard');
+    Alert.alert('Error', 'Something went wrong', [{ text: 'OK' }]);
+
     } finally {
       setLoading(false);
     }
@@ -273,7 +274,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingBottom: 130, // Extra padding to ensure content clears tab bar
+    paddingBottom: 130,
   },
   header: {
     alignItems: 'center',
@@ -301,7 +302,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     backgroundColor: 'rgba(255,255,255,0.03)',
     borderRadius: 40,
-    shadowColor: '#ffffff',
+    shadowColor: '#00BFA6', // teal glow
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.3,
     shadowRadius: 15,
@@ -321,9 +322,9 @@ const styles = StyleSheet.create({
   titleUnderline: {
     width: 100,
     height: 3,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#00BFA6', // teal
     marginBottom: 20,
-    shadowColor: '#ffffff',
+    shadowColor: '#00BFA6',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.6,
     shadowRadius: 10,
@@ -372,9 +373,9 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   sceneButtonActive: {
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderColor: 'rgba(255,255,255,0.3)',
-    shadowColor: '#ffffff',
+    backgroundColor: '#FF6F3C', // orange
+    borderColor: '#FFA533',
+    shadowColor: '#FF6F3C',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.3,
     shadowRadius: 10,
@@ -397,8 +398,8 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 2,
-    backgroundColor: '#ffffff',
-    shadowColor: '#ffffff',
+    backgroundColor: '#FFA533', // orange accent
+    shadowColor: '#FFA533',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.8,
     shadowRadius: 4,
@@ -434,8 +435,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginBottom: 36,
     borderWidth: 1,
-    borderColor: '#ffffff',
-    shadowColor: '#ffffff',
+    borderColor: '#FFA533', // orange
+    shadowColor: '#FFA533',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
@@ -505,7 +506,7 @@ const styles = StyleSheet.create({
   },
   shotImage: {
     width: '100%',
-    height: 220,
+    aspectRatio: 2, // 2:1 cinematic ratio
     borderRadius: 12,
     backgroundColor: 'rgba(0,0,0,0.5)',
   },
