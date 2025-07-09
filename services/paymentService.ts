@@ -1,5 +1,4 @@
 // /services/paymentService.ts
-
 export interface SubscriptionProduct {
   identifier: string;
   title: string;
@@ -12,23 +11,26 @@ export interface SubscriptionProduct {
 export const subscriptionProducts = async (): Promise<SubscriptionProduct[]> => {
   return [
     {
-      identifier: 'price_lifetime_xyz',
+      identifier: 'price_1RasBfIgN98dwGnNFbbrFxqo',
       title: 'Lifetime Pro Suite',
-      description: 'All future upgrades free, full access to Pro Suite, priority support, and exclusive tools.',
+      description:
+        'All future upgrades free, full access to Pro Suite, priority support, and exclusive tools.',
       price: '$199.00',
       period: 'One-time',
     },
     {
-      identifier: 'price_yearly_xyz',
+      identifier: 'price_1Ras6nIgN98dwGnNS4Zazdux',
       title: 'Yearly Pro',
-      description: 'Full Pro features. Save 20% vs monthly.',
+      description:
+        'Full Pro features. Save 20% vs monthly.',
       price: '$38.30',
       period: 'Yearly',
     },
     {
-      identifier: 'price_monthly_xyz',
+      identifier: 'price_1Ras0gIgN98dwGnNFn2dMyFO',
       title: 'Monthly Pro',
-      description: 'Full Pro features. Cancel anytime.',
+      description:
+        'Full Pro features. Cancel anytime.',
       price: '$3.99',
       period: 'Monthly',
     },

@@ -5,12 +5,18 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
+  Alert,
+  Platform,
 } from 'react-native';
 import { startStripeCheckout } from "@/services/paymentService";
 
 export default function UpgradeScreen() {
   const handleSubscribe = (priceId: string) => {
-    startStripeCheckout(priceId);
+    if (Platform.OS === "web") {
+      startStripeCheckout(priceId);
+    } else {
+      Alert.alert("Subscription", "Stripe checkout is only implemented for web at this time.");
+    }
   };
 
   return (
