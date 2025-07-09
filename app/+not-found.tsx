@@ -1,5 +1,6 @@
+
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
@@ -9,25 +10,25 @@ export default function NotFoundScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <LinearGradient
-        colors={['#1e1b4b', '#312e81', '#1f2937']}
+        colors={['#003840', '#FF6A00']}
         style={styles.gradient}
       >
         <View style={styles.content}>
           <View style={styles.iconContainer}>
             <AlertTriangle size={48} color="#f59e0b" />
           </View>
-          
+
           <Text style={styles.title}>Page Not Found</Text>
           <Text style={styles.description}>
             The screen you're looking for doesn't exist.
           </Text>
-          
+
           <TouchableOpacity
             style={styles.homeButton}
             onPress={() => router.replace('/')}
           >
             <LinearGradient
-              colors={['#8b5cf6', '#7c3aed']}
+              colors={['#FF6A00', '#003840']}
               style={styles.buttonGradient}
             >
               <Home size={20} color="#ffffff" />
@@ -43,7 +44,7 @@ export default function NotFoundScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#111827',
+    backgroundColor: '#0f172a',
   },
   gradient: {
     flex: 1,
@@ -62,6 +63,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 24,
+    shadowColor: '#f59e0b',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
   },
   title: {
     fontSize: 28,
@@ -73,7 +78,7 @@ const styles = StyleSheet.create({
   description: {
     fontSize: 16,
     fontFamily: 'Inter-Regular',
-    color: '#9ca3af',
+    color: '#cbd5e1',
     textAlign: 'center',
     marginBottom: 32,
     lineHeight: 24,

@@ -8,12 +8,17 @@
     "scheme": "vizirfilmsuite",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/splash.png",
+      "resizeMode": "cover",
+      "backgroundColor": "#0d3b3c"
+    },
     "ios": {
       "supportsTablet": true
     },
     "web": {
       "bundler": "metro",
-      "output": "static",
+      "output": "server",
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
@@ -21,6 +26,9 @@
       "expo-font",
       "expo-web-browser"
     ],
+    "extra": {
+      "apiKey": "${EXPO_PUBLIC_OPENAI_API_KEY}"
+    },
     "experiments": {
       "typedRoutes": true
     }

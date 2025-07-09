@@ -1,224 +1,330 @@
-import React from 'react';
+// /app/(tabs)/sound.tsx
+import { exportFilmPackageAsPDF } from "@/services/exportService";
+import React, { useState } from 'react';
 import {
+  ScrollView,
   View,
   Text,
-  ScrollView,
-  StyleSheet,
-  ImageBackground,
+  TouchableOpacity,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { LinearGradient } from 'expo-linear-gradient';
-import { Music, Volume2 } from 'lucide-react-native';
 import { useFilmStore } from '@/store/filmStore';
-import EmptyState from '@/components/EmptyState';
+import { generateSoundDesign } from '@/services/aiService';
+import { Volume2 } from 'lucide-react-native';
+import { SoundPlan } from '@/store/filmStore';
 
 export default function SoundScreen() {
-  const { filmPackage } = useFilmStore();
+  const { filmPackage, updateFilmPackage } = useFilmStore();
 
-  if (!filmPackage) {
+  const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState<string>("");
+
+  const handleGenerateSoundDesign = async () => {
+    try {
+      setLoading(true);
+      setLoadingMessage("Generating sound design...");
+
+      const result = await generateSoundDesign(
+        filmPackage?.script || "",
+        filmPackage?.genre || "",
+        setLoadingMessage
+      );
+
+      if (result) {
+        updateFilmPackage({
+          soundDesign:
+            typeof result === "string"
+              ? result
+              : { ...result }
+        });
+      } else {
+        Alert.alert("Error", "Failed to generate sound design.");
+      }
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert("Error", e?.message || "An error occurred.");
+    } finally {
+      setLoading(false);
+      setLoadingMessage("");
+    }
+  };
+
+  const handleExport = async () => {
+    try {
+      if (!filmPackage || Object.keys(filmPackage).length === 0) {
+        Alert.alert("Nothing to export yet!");
+        return;
+      }
+
+      await exportFilmPackageAsPDF(filmPackage, "My_Film_Project.pdf");
+
+      Alert.alert(
+        "Export Complete",
+        "Film package exported and opened for preview!"
+      );
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert(
+        "Export Failed",
+        e?.message || "An error occurred during export."
+      );
+    }
+  };
+
+  const soundPlan = filmPackage.soundDesign;
+
+  if (!soundPlan) {
     return (
-      <EmptyState
-        icon={<Music size={48} color="#ffffff" />}
-        title="No Sound Design Yet"
-        description="Generate your film package first to see sound design and music composition guidelines."
-      />
+      <View
+        style={{
+          flex: 1,
+          justifyContent: 'center',
+          alignItems: 'center',
+          backgroundColor: '#021e1f',
+          padding: 20,
+        }}
+      >
+        <Volume2 size={48} color="#FF6A00" />
+        <Text
+          style={{
+            color: '#B2C8C9',
+            fontSize: 18,
+            marginVertical: 10,
+            textAlign: 'center',
+          }}
+        >
+          No Sound Design Yet
+        </Text>
+        <TouchableOpacity
+          style={{
+            backgroundColor: '#FF6A00',
+            padding: 12,
+            borderRadius: 8,
+            marginTop: 10,
+          }}
+          onPress={handleGenerateSoundDesign}
+          disabled={loading}
+        >
+          {loading ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <Text style={{ color: '#fff', fontWeight: 'bold' }}>
+              Generate Sound Design
+            </Text>
+          )}
+        </TouchableOpacity>
+
+        {!!loadingMessage && (
+          <Text
+            style={{
+              color: '#B2C8C9',
+              marginTop: 10,
+              textAlign: 'center',
+            }}
+          >
+            {loadingMessage}
+          </Text>
+        )}
+      </View>
     );
   }
 
-  return (
-    <View style={styles.container}>
-      <ImageBackground
-        source={{ uri: 'https://images.pexels.com/photos/1983032/pexels-photo-1983032.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2' }}
-        style={styles.backgroundImage}
-        resizeMode="cover"
-      >
-        <View style={styles.smokeOverlay1} />
-        <View style={styles.smokeOverlay2} />
-        <View style={styles.smokeOverlay3} />
-        
-        <LinearGradient
-          colors={[
-            'rgba(0,0,0,0.2)',
-            'rgba(20,20,20,0.4)',
-            'rgba(10,10,10,0.7)',
-            'rgba(0,0,0,0.85)',
-            'rgba(0,0,0,0.95)',
-            'rgba(0,0,0,1)'
-          ]}
-          locations={[0, 0.15, 0.35, 0.6, 0.8, 1]}
-          style={styles.overlay}
-        >
-          <SafeAreaView style={styles.safeArea}>
-            <ScrollView 
-              style={styles.scrollView} 
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.scrollContent}
-            >
-              <View style={styles.header}>
-                <View style={styles.iconContainer}>
-                  <Volume2 size={32} color="#ffffff" strokeWidth={1.5} />
-                  <View style={styles.iconGlow} />
-                </View>
-                <Text style={styles.title}>SOUND & MUSIC</Text>
-                <View style={styles.titleUnderline} />
-                <Text style={styles.subtitle}>AUDIO DESIGN AND MUSICAL COMPOSITION GUIDELINES</Text>
-              </View>
+  const isSoundPlan = (val: unknown): val is SoundPlan =>
+    !!val &&
+    typeof val === 'object' &&
+    'overallStyle' in val;
 
-              <View style={styles.content}>
-                <View style={styles.card}>
-                  <Text style={styles.bodyText}>{filmPackage.soundDesign}</Text>
-                  <View style={styles.cardGlow} />
+  return (
+    <ScrollView
+      style={{
+        backgroundColor: '#021e1f',
+        padding: 20,
+      }}
+    >
+      <Text
+        style={{
+          color: '#FF6A00',
+          fontSize: 20,
+          marginBottom: 10,
+          fontWeight: 'bold',
+        }}
+      >
+        Sound Design Plan
+      </Text>
+
+      {!isSoundPlan(soundPlan) && (
+        <Text
+          style={{
+            color: '#B2C8C9',
+            fontSize: 16,
+            lineHeight: 22,
+          }}
+        >
+          {soundPlan}
+        </Text>
+      )}
+
+      {isSoundPlan(soundPlan) && (
+        <>
+          {soundPlan.overallStyle && (
+            <>
+              <Text
+                style={{
+                  color: '#FF6A00',
+                  fontSize: 16,
+                  fontWeight: 'bold',
+                  marginBottom: 4,
+                }}
+              >
+                Overall Style
+              </Text>
+              <Text
+                style={{
+                  color: '#B2C8C9',
+                  fontSize: 14,
+                  marginBottom: 10,
+                  lineHeight: 20,
+                }}
+              >
+                {soundPlan.overallStyle}
+              </Text>
+            </>
+          )}
+
+          {soundPlan.musicGenres?.length > 0 && (
+            <>
+              <Text
+                style={{
+                  color: '#FF6A00',
+                  fontSize: 16,
+                  fontWeight: 'bold',
+                  marginBottom: 4,
+                }}
+              >
+                Music Genres
+              </Text>
+              {soundPlan.musicGenres.map((genre, index) => (
+                <Text
+                  key={index}
+                  style={{
+                    color: '#B2C8C9',
+                    fontSize: 14,
+                    marginBottom: 2,
+                  }}
+                >
+                  • {genre}
+                </Text>
+              ))}
+              <View style={{ marginBottom: 10 }} />
+            </>
+          )}
+
+          {soundPlan.keyEffects?.length > 0 && (
+            <>
+              <Text
+                style={{
+                  color: '#FF6A00',
+                  fontSize: 16,
+                  fontWeight: 'bold',
+                  marginBottom: 4,
+                }}
+              >
+                Key Sound Effects
+              </Text>
+              {soundPlan.keyEffects.map((effect, index) => (
+                <Text
+                  key={index}
+                  style={{
+                    color: '#B2C8C9',
+                    fontSize: 14,
+                    marginBottom: 2,
+                  }}
+                >
+                  • {effect}
+                </Text>
+              ))}
+              <View style={{ marginBottom: 10 }} />
+            </>
+          )}
+
+          {soundPlan.notableMoments?.length > 0 && (
+            <>
+              <Text
+                style={{
+                  color: '#FF6A00',
+                  fontSize: 16,
+                  fontWeight: 'bold',
+                  marginBottom: 4,
+                }}
+              >
+                Notable Moments
+              </Text>
+              {soundPlan.notableMoments.map((moment, index) => (
+                <View key={index} style={{ marginBottom: 12 }}>
+                  <Text
+                    style={{
+                      color: '#FF6A00',
+                      fontSize: 14,
+                      fontWeight: 'bold',
+                    }}
+                  >
+                    Scene:
+                  </Text>
+                  <Text
+                    style={{
+                      color: '#B2C8C9',
+                      fontSize: 14,
+                      marginBottom: 4,
+                    }}
+                  >
+                    {moment.scene}
+                  </Text>
+
+                  <Text
+                    style={{
+                      color: '#FF6A00',
+                      fontSize: 14,
+                      fontWeight: 'bold',
+                    }}
+                  >
+                    Sound Design:
+                  </Text>
+                  <Text
+                    style={{
+                      color: '#B2C8C9',
+                      fontSize: 14,
+                    }}
+                  >
+                    {moment.soundDesign}
+                  </Text>
                 </View>
-              </View>
-            </ScrollView>
-          </SafeAreaView>
-        </LinearGradient>
-      </ImageBackground>
-    </View>
+              ))}
+            </>
+          )}
+        </>
+      )}
+
+      {/* Export Button */}
+      <TouchableOpacity
+        style={{
+          backgroundColor: "#FF6A00",
+          padding: 12,
+          borderRadius: 8,
+          marginTop: 20,
+        }}
+        onPress={handleExport}
+      >
+        <Text
+          style={{
+            color: "#FFFFFF",
+            fontWeight: "bold",
+            textAlign: "center",
+          }}
+        >
+          Export Sound Design as PDF
+        </Text>
+      </TouchableOpacity>
+    </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000000',
-  },
-  backgroundImage: {
-    flex: 1,
-    width: '100%',
-    height: '100%',
-  },
-  smokeOverlay1: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    opacity: 0.8,
-  },
-  smokeOverlay2: {
-    position: 'absolute',
-    top: '20%',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(10,10,10,0.4)',
-    opacity: 0.7,
-  },
-  smokeOverlay3: {
-    position: 'absolute',
-    top: '40%',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(5,5,5,0.6)',
-    opacity: 0.9,
-  },
-  overlay: {
-    flex: 1,
-  },
-  safeArea: {
-    flex: 1,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingBottom: 130, // Extra padding to ensure content clears tab bar
-  },
-  header: {
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 40,
-    paddingBottom: 40,
-  },
-  iconContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 20,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.15)',
-    position: 'relative',
-  },
-  iconGlow: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    borderRadius: 40,
-    shadowColor: '#ffffff',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.3,
-    shadowRadius: 15,
-  },
-  title: {
-    fontSize: 34,
-    fontFamily: 'Inter-Bold',
-    color: '#ffffff',
-    textAlign: 'center',
-    marginBottom: 16,
-    letterSpacing: 2.5,
-    textTransform: 'uppercase',
-    textShadowColor: 'rgba(0,0,0,0.8)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 10,
-  },
-  titleUnderline: {
-    width: 100,
-    height: 3,
-    backgroundColor: '#ffffff',
-    marginBottom: 20,
-    shadowColor: '#ffffff',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.6,
-    shadowRadius: 10,
-  },
-  subtitle: {
-    fontSize: 12,
-    fontFamily: 'Inter-Regular',
-    color: 'rgba(255,255,255,0.75)',
-    textAlign: 'center',
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-  },
-  content: {
-    paddingHorizontal: 24,
-    paddingBottom: 40,
-  },
-  card: {
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    borderRadius: 16,
-    padding: 26,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    position: 'relative',
-    shadowColor: '#ffffff',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-  },
-  cardGlow: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(255,255,255,0.02)',
-    borderRadius: 16,
-  },
-  bodyText: {
-    fontSize: 16,
-    fontFamily: 'Inter-Regular',
-    color: 'rgba(255,255,255,0.9)',
-    lineHeight: 26,
-    position: 'relative',
-    zIndex: 1,
-  },
-});

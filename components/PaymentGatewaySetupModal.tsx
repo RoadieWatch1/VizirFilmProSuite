@@ -10,13 +10,23 @@ import {
   ScrollView,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { X, CreditCard, ExternalLink, CircleAlert as AlertCircle, DollarSign, Building2, Smartphone } from 'lucide-react-native';
+import {
+  X,
+  CreditCard,
+  ExternalLink,
+  CircleAlert as AlertCircle,
+  DollarSign,
+  Building2,
+  Smartphone,
+} from 'lucide-react-native';
 
 interface PaymentGatewaySetupModalProps {
   onClose: () => void;
 }
 
-export default function PaymentGatewaySetupModal({ onClose }: PaymentGatewaySetupModalProps) {
+export default function PaymentGatewaySetupModal({
+  onClose,
+}: PaymentGatewaySetupModalProps) {
   const [selectedStep, setSelectedStep] = useState(0);
 
   const openLink = (url: string) => {
@@ -37,7 +47,10 @@ export default function PaymentGatewaySetupModal({ onClose }: PaymentGatewaySetu
           <Text style={styles.stepDescription}>
             RevenueCat handles subscription logic, but you need payment gateways to receive money.
           </Text>
-          <TouchableOpacity style={styles.linkButton} onPress={() => openLink('https://app.revenuecat.com/')}>
+          <TouchableOpacity
+            style={styles.linkButton}
+            onPress={() => openLink('https://app.revenuecat.com/')}
+          >
             <Text style={styles.linkText}>Create Account</Text>
             <ExternalLink size={6} color="#dc2626" />
           </TouchableOpacity>
@@ -59,7 +72,10 @@ export default function PaymentGatewaySetupModal({ onClose }: PaymentGatewaySetu
             <Text style={styles.requirementItem}>• Bank account for payouts</Text>
             <Text style={styles.requirementItem}>• Tax information</Text>
           </View>
-          <TouchableOpacity style={styles.linkButton} onPress={() => openLink('https://developer.apple.com/app-store-connect/')}>
+          <TouchableOpacity
+            style={styles.linkButton}
+            onPress={() => openLink('https://developer.apple.com/app-store-connect/')}
+          >
             <Text style={styles.linkText}>App Store Connect</Text>
             <ExternalLink size={6} color="#dc2626" />
           </TouchableOpacity>
@@ -81,7 +97,10 @@ export default function PaymentGatewaySetupModal({ onClose }: PaymentGatewaySetu
             <Text style={styles.requirementItem}>• Google Payments Merchant Account</Text>
             <Text style={styles.requirementItem}>• Bank account for payouts</Text>
           </View>
-          <TouchableOpacity style={styles.linkButton} onPress={() => openLink('https://play.google.com/console/')}>
+          <TouchableOpacity
+            style={styles.linkButton}
+            onPress={() => openLink('https://play.google.com/console/')}
+          >
             <Text style={styles.linkText}>Google Play Console</Text>
             <ExternalLink size={6} color="#dc2626" />
           </TouchableOpacity>
@@ -98,38 +117,25 @@ export default function PaymentGatewaySetupModal({ onClose }: PaymentGatewaySetu
             Here's how payments work in your film production app:
           </Text>
           <View style={styles.flowDiagram}>
-            <View style={styles.flowStep}>
-              <Text style={styles.flowNumber}>1</Text>
-              <Text style={styles.flowText}>User subscribes in your app</Text>
-            </View>
-            <View style={styles.flowArrow}>
-              <Text style={styles.arrowText}>↓</Text>
-            </View>
-            <View style={styles.flowStep}>
-              <Text style={styles.flowNumber}>2</Text>
-              <Text style={styles.flowText}>Apple/Google processes payment</Text>
-            </View>
-            <View style={styles.flowArrow}>
-              <Text style={styles.arrowText}>↓</Text>
-            </View>
-            <View style={styles.flowStep}>
-              <Text style={styles.flowNumber}>3</Text>
-              <Text style={styles.flowText}>RevenueCat receives webhook</Text>
-            </View>
-            <View style={styles.flowArrow}>
-              <Text style={styles.arrowText}>↓</Text>
-            </View>
-            <View style={styles.flowStep}>
-              <Text style={styles.flowNumber}>4</Text>
-              <Text style={styles.flowText}>Your app unlocks Pro features</Text>
-            </View>
-            <View style={styles.flowArrow}>
-              <Text style={styles.arrowText}>↓</Text>
-            </View>
-            <View style={styles.flowStep}>
-              <Text style={styles.flowNumber}>5</Text>
-              <Text style={styles.flowText}>Money deposited to your bank (monthly)</Text>
-            </View>
+            {[
+              'User subscribes in your app',
+              'Apple/Google processes payment',
+              'RevenueCat receives webhook',
+              'Your app unlocks Pro features',
+              'Money deposited to your bank (monthly)',
+            ].map((text, index) => (
+              <React.Fragment key={index}>
+                <View style={styles.flowStep}>
+                  <Text style={styles.flowNumber}>{index + 1}</Text>
+                  <Text style={styles.flowText}>{text}</Text>
+                </View>
+                {index < 4 && (
+                  <View style={styles.flowArrow}>
+                    <Text style={styles.arrowText}>↓</Text>
+                  </View>
+                )}
+              </React.Fragment>
+            ))}
           </View>
         </View>
       ),
@@ -149,14 +155,18 @@ export default function PaymentGatewaySetupModal({ onClose }: PaymentGatewaySetu
               <Text style={styles.bankDescription}>
                 Configure in App Store Connect → Agreements, Tax, and Banking
               </Text>
-              <Text style={styles.bankNote}>Pays monthly, 45 days after month end</Text>
+              <Text style={styles.bankNote}>
+                Pays monthly, 45 days after month end
+              </Text>
             </View>
             <View style={styles.bankItem}>
               <Text style={styles.bankTitle}>Google Payouts</Text>
               <Text style={styles.bankDescription}>
                 Configure in Google Play Console → Financial reports
               </Text>
-              <Text style={styles.bankNote}>Pays monthly, around 15th of following month</Text>
+              <Text style={styles.bankNote}>
+                Pays monthly, around 15th of following month
+              </Text>
             </View>
           </View>
           <View style={styles.warningBox}>
@@ -171,40 +181,49 @@ export default function PaymentGatewaySetupModal({ onClose }: PaymentGatewaySetu
   ];
 
   return (
-    <Modal
-      visible={true}
-      transparent={true}
-      animationType="fade"
-      onRequestClose={handleClose}
-    >
-      <TouchableOpacity 
-        style={styles.overlay} 
-        activeOpacity={1} 
+    <Modal visible transparent animationType="fade" onRequestClose={handleClose}>
+      <TouchableOpacity
+        style={styles.overlay}
+        activeOpacity={1}
         onPress={handleClose}
       >
         <ImageBackground
-          source={{ uri: 'https://images.pexels.com/photos/1983032/pexels-photo-1983032.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2' }}
+          source={{
+            uri:
+              'https://images.pexels.com/photos/1983032/pexels-photo-1983032.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2',
+          }}
           style={styles.backgroundImage}
           resizeMode="cover"
         >
-          <View style={styles.smokeOverlay1} />
-          <View style={styles.smokeOverlay2} />
-          <View style={styles.smokeOverlay3} />
-          <View style={styles.smokeGlow1} />
-          <View style={styles.smokeGlow2} />
-          
+          <View style={{ ...styles.smokeOverlay1, pointerEvents: 'none' }} />
+          <View style={{ ...styles.smokeOverlay2, pointerEvents: 'none' }} />
+          <View style={{ ...styles.smokeOverlay3, pointerEvents: 'none' }} />
+          <View
+            style={{
+              ...styles.smokeGlow1,
+              pointerEvents: 'none',
+              boxShadow: '0 0 30px rgba(255,255,255,0.06)',
+            }}
+          />
+          <View
+            style={{
+              ...styles.smokeGlow2,
+              pointerEvents: 'none',
+              boxShadow: '0 0 25px rgba(220,38,38,0.03)',
+            }}
+          />
+
           <LinearGradient
             colors={[
               'rgba(0,0,0,0.15)',
               'rgba(20,20,20,0.35)',
               'rgba(10,10,10,0.65)',
               'rgba(0,0,0,0.88)',
-              'rgba(0,0,0,0.96)'
+              'rgba(0,0,0,0.96)',
             ]}
-            locations={[0, 0.15, 0.35, 0.7, 1]}
             style={styles.gradientOverlay}
           >
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.modal}
               activeOpacity={1}
               onPress={(e) => e.stopPropagation()}
@@ -215,11 +234,10 @@ export default function PaymentGatewaySetupModal({ onClose }: PaymentGatewaySetu
                 </View>
               </TouchableOpacity>
 
-              <ScrollView 
+              <ScrollView
                 style={styles.modalScrollView}
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.scrollContent}
-                bounces={true}
               >
                 <View style={styles.content}>
                   <View style={styles.iconContainer}>
@@ -227,13 +245,19 @@ export default function PaymentGatewaySetupModal({ onClose }: PaymentGatewaySetu
                     <View style={styles.iconGlow} />
                   </View>
 
-                  <Text style={styles.title}>PAYMENT GATEWAY SETUP</Text>
-                  <View style={styles.titleUnderline} />
+                  <Text style={styles.title}>
+                    PAYMENT GATEWAY SETUP
+                  </Text>
+                  <View
+                    style={{
+                      ...styles.titleUnderline,
+                      boxShadow: '0 0 10px #ffffff99',
+                    }}
+                  />
                   <Text style={styles.subtitle}>
                     COMPLETE GUIDE TO RECEIVING SUBSCRIPTION PAYMENTS
                   </Text>
 
-                  {/* Fixed Pricing Display */}
                   <View style={styles.pricingDisplay}>
                     <Text style={styles.pricingTitle}>YOUR NEW PRICING STRUCTURE</Text>
                     <View style={styles.pricingGrid}>
@@ -258,9 +282,12 @@ export default function PaymentGatewaySetupModal({ onClose }: PaymentGatewaySetu
                     </View>
                   </View>
 
-                  {/* Step Navigation */}
                   <View style={styles.stepNavigation}>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.stepScrollContainer}>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.stepScrollContainer}
+                    >
                       {steps.map((step, index) => (
                         <TouchableOpacity
                           key={index}
@@ -271,10 +298,12 @@ export default function PaymentGatewaySetupModal({ onClose }: PaymentGatewaySetu
                           onPress={() => setSelectedStep(index)}
                         >
                           {step.icon}
-                          <Text style={[
-                            styles.stepTabText,
-                            selectedStep === index && styles.stepTabTextActive,
-                          ]}>
+                          <Text
+                            style={[
+                              styles.stepTabText,
+                              selectedStep === index && styles.stepTabTextActive,
+                            ]}
+                          >
                             {step.title}
                           </Text>
                         </TouchableOpacity>
@@ -282,14 +311,12 @@ export default function PaymentGatewaySetupModal({ onClose }: PaymentGatewaySetu
                     </ScrollView>
                   </View>
 
-                  {/* Step Content */}
                   <View style={styles.stepContainer}>
                     <Text style={styles.stepTitle}>{steps[selectedStep].title}</Text>
                     <Text style={styles.stepSubtitle}>{steps[selectedStep].description}</Text>
-                    <ScrollView 
+                    <ScrollView
                       style={styles.stepContentScrollView}
                       showsVerticalScrollIndicator={false}
-                      nestedScrollEnabled={true}
                     >
                       {steps[selectedStep].content}
                     </ScrollView>
@@ -316,6 +343,42 @@ export default function PaymentGatewaySetupModal({ onClose }: PaymentGatewaySetu
 }
 
 const styles = StyleSheet.create({
+  iconContainer: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(220,38,38,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+    position: 'relative',
+  },
+  iconGlow: {
+    position: 'absolute',
+    top: -8,
+    left: -8,
+    right: -8,
+    bottom: -8,
+    borderRadius: 26,
+    backgroundColor: 'rgba(220,38,38,0.15)',
+    opacity: 0.7,
+    zIndex: -1,
+  },
+  content: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 10,
+  },
+  modalScrollView: {
+    flex: 1,
+    width: '100%',
+  },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   overlay: {
     flex: 1,
     justifyContent: 'center',
@@ -366,10 +429,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.012)',
     opacity: 0.6,
     borderRadius: 100,
-    shadowColor: 'rgba(255,255,255,0.06)',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.3,
-    shadowRadius: 30,
+    boxShadow: '0px 0px 30px rgba(255,255,255,0.06)',
   },
   smokeGlow2: {
     position: 'absolute',
@@ -380,10 +440,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(220,38,38,0.008)',
     opacity: 0.4,
     borderRadius: 80,
-    shadowColor: 'rgba(220,38,38,0.03)',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.2,
-    shadowRadius: 25,
+    boxShadow: '0px 0px 25px rgba(220,38,38,0.03)',
   },
   gradientOverlay: {
     flex: 1,
@@ -398,66 +455,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.92)',
     borderRadius: 8,
     position: 'relative',
-    shadowColor: '#ffffff',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.2,
-    shadowRadius: 25,
+    boxShadow: '0px 0px 25px #ffffff33',
     maxHeight: '70%',
     minHeight: '50%',
-  },
-  modalScrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    flexGrow: 1,
-    paddingBottom: 10,
-  },
-  closeButton: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    zIndex: 1000,
-    padding: 6,
-  },
-  closeButtonBackground: {
-    backgroundColor: 'rgba(0,0,0,0.9)',
-    borderRadius: 4,
-    padding: 4,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
-  },
-  content: {
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    paddingTop: 30,
-    position: 'relative',
-    zIndex: 1,
-  },
-  iconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.15)',
-    position: 'relative',
-  },
-  iconGlow: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    borderRadius: 20,
-    shadowColor: '#ffffff',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.3,
-    shadowRadius: 15,
   },
   title: {
     fontSize: 12,
@@ -476,11 +476,29 @@ const styles = StyleSheet.create({
     height: 2,
     backgroundColor: '#ffffff',
     marginBottom: 8,
-    shadowColor: '#ffffff',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.6,
-    shadowRadius: 10,
+    boxShadow: '0px 0px 10px #ffffff99',
   },
+  // ... (rest of styles remain unchanged unless further changes needed)
+  closeButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    zIndex: 10,
+    padding: 5,
+  },
+  closeButtonBackground: {
+    backgroundColor: 'rgba(220,38,38,0.85)',
+    borderRadius: 20,
+    padding: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#dc2626',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.5,
+    shadowRadius: 4,
+  },
+
+
   subtitle: {
     fontSize: 7,
     fontFamily: 'Inter-Regular',

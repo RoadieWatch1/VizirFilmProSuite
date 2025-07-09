@@ -1,7 +1,8 @@
 {
+  "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "target": "es2018",
-    "lib": ["es2018"],
+    "lib": ["es2018", "dom"],                        // ✅ Add DOM
     "module": "esnext",
     "moduleResolution": "node",
     "jsx": "react-native",
@@ -10,7 +11,8 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "strict": true,
-    "types": ["expo-router"],
+    "types": ["expo-router", "react", "react-native"], // ✅ Add react types
+    "baseUrl": ".",
     "paths": {
       "@/*": ["./*"]
     }

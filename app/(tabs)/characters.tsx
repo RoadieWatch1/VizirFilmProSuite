@@ -1,224 +1,221 @@
-import React from 'react';
+// /app/(tabs)/characters.tsx
+import { exportFilmPackageAsPDF } from "@/services/exportService";
+import React, { useState } from 'react';
 import {
-  View,
-  Text,
   ScrollView,
-  StyleSheet,
-  ImageBackground,
+  Text,
+  View,
+  TouchableOpacity,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { LinearGradient } from 'expo-linear-gradient';
-import { Users, User } from 'lucide-react-native';
 import { useFilmStore } from '@/store/filmStore';
-import EmptyState from '@/components/EmptyState';
+import { User } from 'lucide-react-native';
+import { Character } from '@/store/filmStore';
 
 export default function CharactersScreen() {
-  const { filmPackage } = useFilmStore();
+  const { filmPackage, updateFilmPackage } = useFilmStore();
 
-  if (!filmPackage) {
+  const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState('');
+
+  const handleGenerateCharacters = async () => {
+    const idea = filmPackage?.script || '';
+    const genre = filmPackage?.genre || 'Drama';
+
+    if (!idea) {
+      Alert.alert(
+        'No Script',
+        'Please generate your film first before generating characters.'
+      );
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setLoadingMessage('Generating characters...');
+
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          movieIdea: idea,
+          movieGenre: genre,
+          scriptLength: "short",
+          step: "characters",
+          provider: "openai",
+        }),
+      });
+
+      if (!res.ok) {
+        const errorResponse = await res.json().catch(() => ({}));
+        const errorMsg = errorResponse?.error || "API error";
+        throw new Error(errorMsg);
+      }
+
+      const data = await res.json();
+
+      let parsedCharacters: Character[] | undefined = undefined;
+
+      if (data?.characters && Array.isArray(data.characters)) {
+        parsedCharacters = data.characters as Character[];
+      }
+
+      if (parsedCharacters?.length) {
+        updateFilmPackage({ characters: parsedCharacters });
+        Alert.alert('Characters generated successfully!');
+      } else {
+        Alert.alert('No characters found.', 'Try regenerating.');
+      }
+    } catch (error: any) {
+      console.error(error);
+      Alert.alert('Error', error?.message || 'Failed to generate characters.');
+    } finally {
+      setLoading(false);
+      setLoadingMessage('');
+    }
+  };
+
+  const handleExport = async () => {
+    try {
+      if (!filmPackage || Object.keys(filmPackage).length === 0) {
+        Alert.alert("Nothing to export yet!");
+        return;
+      }
+
+      await exportFilmPackageAsPDF(filmPackage, "My_Film_Project.pdf");
+
+      Alert.alert(
+        "Export Complete",
+        "Film package exported and opened for preview!"
+      );
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert(
+        "Export Failed",
+        e?.message || "An error occurred during export."
+      );
+    }
+  };
+
+  if (!filmPackage?.characters || filmPackage.characters.length === 0) {
     return (
-      <EmptyState
-        icon={<Users size={48} color="#ffffff" />}
-        title="No Characters Yet"
-        description="Generate your film package first to see detailed character breakdowns and development."
-      />
+      <View
+        style={{
+          flex: 1,
+          justifyContent: 'center',
+          alignItems: 'center',
+          backgroundColor: '#021e1f',
+          padding: 20,
+        }}
+      >
+        <User size={48} color="#FF6A00" />
+        <Text
+          style={{
+            color: '#B2C8C9',
+            fontSize: 18,
+            marginVertical: 10,
+            textAlign: 'center',
+          }}
+        >
+          No Characters Yet
+        </Text>
+        <TouchableOpacity
+          style={{
+            backgroundColor: '#FF6A00',
+            padding: 12,
+            borderRadius: 8,
+            marginTop: 10,
+          }}
+          onPress={handleGenerateCharacters}
+          disabled={loading}
+        >
+          {loading ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <Text style={{ color: '#FFFFFF', fontWeight: 'bold' }}>
+              Generate Characters
+            </Text>
+          )}
+        </TouchableOpacity>
+
+        {!!loadingMessage && (
+          <Text
+            style={{
+              color: '#B2C8C9',
+              marginTop: 10,
+              textAlign: 'center',
+            }}
+          >
+            {loadingMessage}
+          </Text>
+        )}
+      </View>
     );
   }
 
   return (
-    <View style={styles.container}>
-      <ImageBackground
-        source={{ uri: 'https://images.pexels.com/photos/1983032/pexels-photo-1983032.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2' }}
-        style={styles.backgroundImage}
-        resizeMode="cover"
+    <ScrollView
+      style={{
+        backgroundColor: '#021e1f',
+        padding: 20,
+      }}
+    >
+      <Text
+        style={{
+          color: '#FF6A00',
+          fontSize: 20,
+          marginBottom: 10,
+          fontWeight: 'bold',
+        }}
       >
-        <View style={styles.smokeOverlay1} />
-        <View style={styles.smokeOverlay2} />
-        <View style={styles.smokeOverlay3} />
-        
-        <LinearGradient
-          colors={[
-            'rgba(0,0,0,0.2)',
-            'rgba(20,20,20,0.4)',
-            'rgba(10,10,10,0.7)',
-            'rgba(0,0,0,0.85)',
-            'rgba(0,0,0,0.95)',
-            'rgba(0,0,0,1)'
-          ]}
-          locations={[0, 0.15, 0.35, 0.6, 0.8, 1]}
-          style={styles.overlay}
-        >
-          <SafeAreaView style={styles.safeArea}>
-            <ScrollView 
-              style={styles.scrollView} 
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.scrollContent}
-            >
-              <View style={styles.header}>
-                <View style={styles.iconContainer}>
-                  <User size={32} color="#ffffff" strokeWidth={1.5} />
-                  <View style={styles.iconGlow} />
-                </View>
-                <Text style={styles.title}>CHARACTERS</Text>
-                <View style={styles.titleUnderline} />
-                <Text style={styles.subtitle}>DETAILED CHARACTER BREAKDOWNS AND DEVELOPMENT</Text>
-              </View>
+        Characters
+      </Text>
+      {filmPackage.characters.map((char, index) => (
+        <View key={index} style={{ marginBottom: 20 }}>
+          <Text
+            style={{
+              color: '#FF6A00',
+              fontWeight: 'bold',
+              fontSize: 16,
+            }}
+          >
+            {char.name}
+          </Text>
+          <Text
+            style={{
+              color: '#B2C8C9',
+              marginTop: 4,
+              fontSize: 14,
+              lineHeight: 20,
+            }}
+          >
+            {char.description}
+          </Text>
+        </View>
+      ))}
 
-              <View style={styles.content}>
-                <View style={styles.card}>
-                  <Text style={styles.bodyText}>{filmPackage.characters}</Text>
-                  <View style={styles.cardGlow} />
-                </View>
-              </View>
-            </ScrollView>
-          </SafeAreaView>
-        </LinearGradient>
-      </ImageBackground>
-    </View>
+      <TouchableOpacity
+        style={{
+          backgroundColor: '#FF6A00',
+          padding: 12,
+          borderRadius: 8,
+          marginTop: 20,
+        }}
+        onPress={handleExport}
+      >
+        <Text
+          style={{
+            color: '#FFFFFF',
+            fontWeight: 'bold',
+            textAlign: 'center',
+          }}
+        >
+          Export Characters as PDF
+        </Text>
+      </TouchableOpacity>
+    </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000000',
-  },
-  backgroundImage: {
-    flex: 1,
-    width: '100%',
-    height: '100%',
-  },
-  smokeOverlay1: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    opacity: 0.8,
-  },
-  smokeOverlay2: {
-    position: 'absolute',
-    top: '20%',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(10,10,10,0.4)',
-    opacity: 0.7,
-  },
-  smokeOverlay3: {
-    position: 'absolute',
-    top: '40%',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(5,5,5,0.6)',
-    opacity: 0.9,
-  },
-  overlay: {
-    flex: 1,
-  },
-  safeArea: {
-    flex: 1,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingBottom: 130, // Extra padding to ensure content clears tab bar
-  },
-  header: {
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 40,
-    paddingBottom: 40,
-  },
-  iconContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 20,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.15)',
-    position: 'relative',
-  },
-  iconGlow: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    borderRadius: 40,
-    shadowColor: '#ffffff',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.3,
-    shadowRadius: 15,
-  },
-  title: {
-    fontSize: 34,
-    fontFamily: 'Inter-Bold',
-    color: '#ffffff',
-    textAlign: 'center',
-    marginBottom: 16,
-    letterSpacing: 2.5,
-    textTransform: 'uppercase',
-    textShadowColor: 'rgba(0,0,0,0.8)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 10,
-  },
-  titleUnderline: {
-    width: 100,
-    height: 3,
-    backgroundColor: '#ffffff',
-    marginBottom: 20,
-    shadowColor: '#ffffff',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.6,
-    shadowRadius: 10,
-  },
-  subtitle: {
-    fontSize: 12,
-    fontFamily: 'Inter-Regular',
-    color: 'rgba(255,255,255,0.75)',
-    textAlign: 'center',
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-  },
-  content: {
-    paddingHorizontal: 24,
-    paddingBottom: 40,
-  },
-  card: {
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    borderRadius: 16,
-    padding: 26,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    position: 'relative',
-    shadowColor: '#ffffff',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-  },
-  cardGlow: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(255,255,255,0.02)',
-    borderRadius: 16,
-  },
-  bodyText: {
-    fontSize: 16,
-    fontFamily: 'Inter-Regular',
-    color: 'rgba(255,255,255,0.9)',
-    lineHeight: 26,
-    position: 'relative',
-    zIndex: 1,
-  },
-});

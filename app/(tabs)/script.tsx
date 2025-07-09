@@ -1,5 +1,6 @@
-// /app/(tabs)/schedule.tsx
-import { exportFilmPackageAsPDF } from "@/services/exportService";
+// /app/(tabs)/script.tsx
+
+import { exportScriptAsTxt } from "@/services/exportService";
 import React, { useState } from "react";
 import {
   ScrollView,
@@ -8,34 +9,35 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
+  TextInput,
 } from "react-native";
 import { useFilmStore } from "@/store/filmStore";
-import { Calendar } from "lucide-react-native";
+import { Video } from "lucide-react-native";
 
-export default function ScheduleScreen() {
+export default function ScriptScreen() {
   const { filmPackage, updateFilmPackage } = useFilmStore();
 
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState<string>("");
 
-  const handleGenerateSchedule = async () => {
-    const idea = filmPackage?.script || "";
-    const genre = filmPackage?.genre || "";
-    const length = filmPackage?.length || "";
+  const [idea, setIdea] = useState(filmPackage.idea || "");
+  const [genre, setGenre] = useState(filmPackage.genre || "");
+  const [length, setLength] = useState(filmPackage.length || "");
 
+  const handleGenerateScript = async () => {
     if (!idea || !genre || !length) {
       Alert.alert(
         "Missing Data",
-        "Please generate your film package first before creating a shooting schedule."
+        "Please enter your film idea, genre, and length before generating a script."
       );
       return;
     }
 
     setLoading(true);
-    setLoadingMessage("Generating shooting schedule...");
+    setLoadingMessage("Generating script...");
 
     try {
-      const response = await fetch("/api/schedule", {
+      const response = await fetch("/api/generate", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -44,6 +46,8 @@ export default function ScheduleScreen() {
           movieIdea: idea,
           movieGenre: genre,
           scriptLength: length,
+          step: "script",
+          provider: "openai",
         }),
       });
 
@@ -55,19 +59,26 @@ export default function ScheduleScreen() {
 
       const data = await response.json();
 
-      const schedule =
-        data.schedule?.map((item: any) => ({
-          day: item.day,
-          scenes: item.scenes,
-          location: item.location,
-        })) || [];
+      console.log("✅ API returned script data:", data);
 
-      updateFilmPackage({ schedule });
+      const scriptText =
+        data?.script ||
+        data?.result?.script ||
+        "";
+
+      updateFilmPackage({
+        script: scriptText,
+        idea,
+        genre,
+        length,
+      });
+
+      Alert.alert("Script Generated", "Your film script has been generated!");
     } catch (error: any) {
       console.error(error);
       Alert.alert(
         "Error",
-        error?.message || "Failed to generate shooting schedule."
+        error?.message || "Failed to generate script."
       );
     } finally {
       setLoading(false);
@@ -77,16 +88,21 @@ export default function ScheduleScreen() {
 
   const handleExport = async () => {
     try {
-      if (!filmPackage || Object.keys(filmPackage).length === 0) {
+      if (!filmPackage?.script || filmPackage.script.trim() === "") {
         Alert.alert("Nothing to export yet!");
         return;
       }
 
-      await exportFilmPackageAsPDF(filmPackage, "My_Film_Project.pdf");
+      console.log("✅ Exporting script text:", filmPackage.script);
+
+      await exportScriptAsTxt(
+        filmPackage.script,
+        "My_Film_Script.txt"
+      );
 
       Alert.alert(
         "Export Complete",
-        "Film package exported and opened for preview!"
+        "Film script exported as TXT!"
       );
     } catch (e: any) {
       console.error(e);
@@ -97,18 +113,18 @@ export default function ScheduleScreen() {
     }
   };
 
-  if (!filmPackage?.schedule || filmPackage.schedule.length === 0) {
+  if (!filmPackage?.script || filmPackage.script.trim() === "") {
     return (
-      <View
-        style={{
-          flex: 1,
+      <ScrollView
+        contentContainerStyle={{
+          flexGrow: 1,
           justifyContent: "center",
           alignItems: "center",
           backgroundColor: "#021e1f",
           padding: 20,
         }}
       >
-        <Calendar size={48} color="#FF6A00" />
+        <Video size={48} color="#FF6A00" />
         <Text
           style={{
             color: "#B2C8C9",
@@ -117,23 +133,68 @@ export default function ScheduleScreen() {
             textAlign: "center",
           }}
         >
-          No Schedule Yet
+          No Script Yet
         </Text>
+
+        <TextInput
+          placeholder="Film Idea"
+          placeholderTextColor="#999"
+          value={idea}
+          onChangeText={setIdea}
+          style={{
+            backgroundColor: "#032f30",
+            color: "#FFFFFF",
+            width: "100%",
+            padding: 10,
+            marginBottom: 10,
+            borderRadius: 8,
+          }}
+        />
+        <TextInput
+          placeholder="Genre"
+          placeholderTextColor="#999"
+          value={genre}
+          onChangeText={setGenre}
+          style={{
+            backgroundColor: "#032f30",
+            color: "#FFFFFF",
+            width: "100%",
+            padding: 10,
+            marginBottom: 10,
+            borderRadius: 8,
+          }}
+        />
+        <TextInput
+          placeholder="Script Length (short, medium, long)"
+          placeholderTextColor="#999"
+          value={length}
+          onChangeText={setLength}
+          style={{
+            backgroundColor: "#032f30",
+            color: "#FFFFFF",
+            width: "100%",
+            padding: 10,
+            marginBottom: 10,
+            borderRadius: 8,
+          }}
+        />
+
         <TouchableOpacity
           style={{
             backgroundColor: "#FF6A00",
             padding: 12,
             borderRadius: 8,
             marginTop: 10,
+            width: "100%",
           }}
-          onPress={handleGenerateSchedule}
+          onPress={handleGenerateScript}
           disabled={loading}
         >
           {loading ? (
             <ActivityIndicator color="#FFFFFF" />
           ) : (
-            <Text style={{ color: "#fff", fontWeight: "bold" }}>
-              Generate Schedule
+            <Text style={{ color: "#fff", fontWeight: "bold", textAlign: "center" }}>
+              Generate Script
             </Text>
           )}
         </TouchableOpacity>
@@ -149,7 +210,7 @@ export default function ScheduleScreen() {
             {loadingMessage}
           </Text>
         )}
-      </View>
+      </ScrollView>
     );
   }
 
@@ -168,39 +229,19 @@ export default function ScheduleScreen() {
           fontWeight: "bold",
         }}
       >
-        Shooting Schedule
+        Film Script
+      </Text>
+      <Text
+        style={{
+          color: "#FFFFFF",
+          fontFamily: "Courier",
+          fontSize: 16,
+          lineHeight: 24,
+        }}
+      >
+        {filmPackage.script}
       </Text>
 
-      {filmPackage.schedule.map((item, index) => (
-        <View key={index} style={{ marginBottom: 20 }}>
-          <Text
-            style={{
-              color: "#B2C8C9",
-              fontWeight: "bold",
-              fontSize: 16,
-            }}
-          >
-            Day {item.day}
-          </Text>
-          <Text
-            style={{
-              color: "#B2C8C9",
-              marginTop: 4,
-            }}
-          >
-            Scenes: {item.scenes?.length > 0 ? item.scenes.join(", ") : "N/A"}
-          </Text>
-          <Text
-            style={{
-              color: "#B2C8C9",
-            }}
-          >
-            Location: {item.location || "N/A"}
-          </Text>
-        </View>
-      ))}
-
-      {/* Export Button */}
       <TouchableOpacity
         style={{
           backgroundColor: "#FF6A00",
@@ -217,7 +258,7 @@ export default function ScheduleScreen() {
             textAlign: "center",
           }}
         >
-          Export Schedule as PDF
+          Export Script as TXT
         </Text>
       </TouchableOpacity>
     </ScrollView>

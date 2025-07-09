@@ -1,25 +1,40 @@
-export async function GET(request: Request) {
+// C:\Users\vizir\VizirFilmProSuite\app\api\debug+api.ts
+
+export async function GET(request: Request): Promise<Response> {
   try {
-    const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-    
-    return new Response(JSON.stringify({
-      hasApiKey: !!OPENAI_API_KEY,
-      keyLength: OPENAI_API_KEY?.length || 0,
-      keyPrefix: OPENAI_API_KEY?.substring(0, 7) || 'none',
-      allEnvKeys: Object.keys(process.env).filter(key => key.includes('OPENAI')),
+    const serverKey = process.env.OPENAI_API_KEY || "";
+    const expoKey = process.env.EXPO_PUBLIC_OPENAI_API_KEY || "";
+
+    const response = {
+      hasServerApiKey: !!serverKey,
+      serverKeyLength: serverKey.length,
+      serverKeyPrefix: serverKey ? serverKey.substring(0, 7) : "none",
+
+      hasExpoApiKey: !!expoKey,
+      expoKeyLength: expoKey.length,
+      expoKeyPrefix: expoKey ? expoKey.substring(0, 7) : "none",
+
+      allEnvKeys: Object.keys(process.env).filter((key) =>
+        key.includes("OPENAI")
+      ),
       nodeEnv: process.env.NODE_ENV,
-    }), {
+    };
+
+    return new Response(JSON.stringify(response, null, 2), {
       status: 200,
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+      },
     });
   } catch (error) {
-    return new Response(JSON.stringify({ 
-      error: error instanceof Error ? error.message : 'Unknown error',
-      hasProcessEnv: typeof process !== 'undefined',
-      hasEnv: typeof process.env !== 'undefined',
-    }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    console.error("Debug API error:", error);
+    return new Response(
+      JSON.stringify({ error: "Internal Server Error" }),
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
   }
 }
