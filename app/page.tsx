@@ -189,12 +189,12 @@ export default function HomePage() {
             <div className="flex items-center justify-center space-x-3 mb-4">
               <Film className="w-10 h-10 text-[#FF6A00]" />
               <h1 className="text-4xl font-bold text-white">
-                Vizir Film Generator
+                Vizir Film Pro Suite
               </h1>
             </div>
             <p className="text-xl text-[#B2C8C9] max-w-2xl mx-auto">
-              Transform your ideas into complete film packages with AI-powered
-              generation
+              Transform your ideas into complete film packages with Vizir Film Generator
+              
             </p>
           </div>
 
