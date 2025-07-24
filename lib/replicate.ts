@@ -16,9 +16,11 @@ export async function generateAudioWithReplicate(prompt: string): Promise<{ buff
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      version: "a6f56cd6d8f993f4acac8ec27f4c0e3d8f702e41f3403e7fc6b9f9301f13449d",
+      version: "8db501a4571f51468c2e691c4d52b1a61e6e496a0d02bdbf0f838e5bf289b3eb", // ✅ Valid AudioGen version
       input: {
         prompt,
+        duration: 5, // Optional: in seconds, default is 5
+        output_format: "mp3" // Ensure mp3 output
       },
     }),
   });
