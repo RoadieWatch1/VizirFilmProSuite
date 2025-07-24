@@ -1,5 +1,3 @@
-// C:\Users\vizir\VizirPro\app\api\sound\route.ts
-
 import { NextRequest, NextResponse } from "next/server";
 import { generateTenseAudioAssets } from "@/lib/audioGenerators";
 
@@ -11,15 +9,25 @@ export async function POST(request: NextRequest) {
     const { script, genre } = body;
 
     if (!script || !genre) {
+      console.warn("⚠️ Missing script or genre in request body");
       return NextResponse.json(
         { error: "Missing required fields: script and genre." },
         { status: 400 }
       );
     }
 
-    const soundAssets = await generateTenseAudioAssets(script, genre);
+    console.log("🧠 [API] Generating with genre:", genre);
+    console.log("📝 [API] Using script preview:", script.slice(0, 100) + "...");
 
-    console.log("✅ [API] Generated sound assets:", soundAssets);
+    const rawAssets = await generateTenseAudioAssets(script, genre);
+
+    // Filter out any failed assets
+    const soundAssets = rawAssets.filter((a) => !!a.audioUrl);
+
+    console.log("🎧 [API] Total generated:", rawAssets.length);
+    rawAssets.forEach((a, i) => {
+      console.log(`  - Asset ${i + 1}: ${a.name}, URL: ${a.audioUrl || "❌ No URL"}`);
+    });
 
     return NextResponse.json({
       success: true,
