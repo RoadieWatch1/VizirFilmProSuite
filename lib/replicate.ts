@@ -1,6 +1,5 @@
 // lib/replicate.ts
-
-export async function generateAudioWithReplicate(prompt: string): Promise<{ buffer: ArrayBuffer, audioUrl: string }> {
+export async function generateAudioWithReplicate(prompt: string): Promise<{ buffer: ArrayBuffer; audioUrl: string }> {
   console.log("📡 [Replicate] Starting audio generation for prompt:", prompt);
 
   const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN;
@@ -9,7 +8,7 @@ export async function generateAudioWithReplicate(prompt: string): Promise<{ buff
     throw new Error("❌ [Replicate] Missing REPLICATE_API_TOKEN in environment variables.");
   }
 
-  // 1. Submit prompt to Replicate's AudioGen model
+  // Step 1: Submit the request
   const response = await fetch("https://api.replicate.com/v1/predictions", {
     method: "POST",
     headers: {
@@ -17,7 +16,7 @@ export async function generateAudioWithReplicate(prompt: string): Promise<{ buff
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      version: "f9045ac82e1f6f003adfb38d3f3fc11c2a5f81f3ee4df92c20cdd9c87cbd70ef", // AudioGen v1.1
+      version: "f9045ac82e1f6f003adfb38d3f3fc11c2a5f81f3ee4df92c20cdd9c87cbd70ef",
       input: { prompt },
     }),
   });
@@ -31,35 +30,40 @@ export async function generateAudioWithReplicate(prompt: string): Promise<{ buff
 
   const statusUrl = prediction.urls.get;
 
-  // 2. Poll status until completed
+  // Step 2: Poll until the job completes
   let result;
-  while (true) {
+  let attempts = 0;
+  const maxAttempts = 30;
+
+  while (attempts < maxAttempts) {
     const statusRes = await fetch(statusUrl, {
-      headers: {
-        Authorization: `Token ${REPLICATE_API_TOKEN}`,
-      },
+      headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
     });
 
     result = await statusRes.json();
 
-    if (result.status === "succeeded") break;
+    if (result.status === "succeeded") {
+      console.log("✅ [Replicate] Generation succeeded!");
+      break;
+    }
+
     if (result.status === "failed") {
       console.error("❌ [Replicate] Generation failed:", result);
       throw new Error("Replicate audio generation failed.");
     }
 
-    console.log("⏳ [Replicate] Still processing...");
-    await new Promise((r) => setTimeout(r, 2000)); // Wait 2 seconds before checking again
+    console.log(`⏳ [Replicate] Attempt ${attempts + 1}: Status = ${result.status}`);
+    await new Promise((r) => setTimeout(r, 3000)); // Wait 3 seconds between polls
+    attempts++;
   }
 
-  // 3. Extract audio URL and fetch the audio file
-  const audioUrl = result.output?.[0];
-  if (!audioUrl) {
-    console.error("❌ [Replicate] No audio URL found in result:", result);
+  if (!result?.output?.[0]) {
+    console.error("❌ [Replicate] No audio output returned:", result);
     throw new Error("No audio output returned from Replicate.");
   }
 
-  console.log("✅ [Replicate] Audio generated at:", audioUrl);
+  const audioUrl = result.output[0];
+  console.log("🎧 [Replicate] Final audio URL:", audioUrl);
 
   const audioRes = await fetch(audioUrl);
   const buffer = await audioRes.arrayBuffer();
