@@ -1,4 +1,5 @@
 // lib/replicate.ts
+
 export async function generateAudioWithReplicate(
   prompt: string
 ): Promise<{ buffer: ArrayBuffer; audioUrl: string }> {
@@ -10,6 +11,7 @@ export async function generateAudioWithReplicate(
     throw new Error("❌ [Replicate] Missing REPLICATE_API_TOKEN in environment variables.");
   }
 
+  // Call the sepal/audiogen model
   const response = await fetch("https://api.replicate.com/v1/predictions", {
     method: "POST",
     headers: {
@@ -29,18 +31,15 @@ export async function generateAudioWithReplicate(
   const prediction = await response.json();
 
   if (!response.ok) {
-    console.error("❌ [Replicate] API Error Response:", prediction);
-    throw new Error(
-      prediction?.detail || "Failed to start Replicate generation. Check API key and model."
-    );
+    console.error("❌ [Replicate] API Error:", prediction);
+    throw new Error(prediction?.detail || "Failed to start Replicate generation.");
   }
 
-  if (!prediction?.urls?.get) {
-    console.error("❌ [Replicate] Missing 'urls.get' in response:", prediction);
-    throw new Error("Invalid Replicate response — missing status polling URL.");
+  const statusUrl = prediction?.urls?.get;
+  if (!statusUrl) {
+    console.error("❌ [Replicate] Missing status polling URL:", prediction);
+    throw new Error("Missing Replicate polling URL.");
   }
-
-  const statusUrl = prediction.urls.get;
 
   let result;
   let attempts = 0;
@@ -71,11 +70,11 @@ export async function generateAudioWithReplicate(
   }
 
   if (!result?.output) {
-    console.error("❌ [Replicate] No output returned:", result);
-    throw new Error("No audio output returned from Replicate.");
+    console.error("❌ [Replicate] No audio output:", result);
+    throw new Error("Replicate did not return any audio output.");
   }
 
-  const audioUrl = result.output;
+  const audioUrl = Array.isArray(result.output) ? result.output[0] : result.output;
   console.log("🎧 [Replicate] Final audio URL:", audioUrl);
 
   const audioRes = await fetch(audioUrl);
