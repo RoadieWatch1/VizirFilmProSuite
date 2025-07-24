@@ -1,5 +1,4 @@
 // lib/audioGenerators.ts
-
 import { uploadAudioFile } from "./firebaseUpload";
 import { generateAudioWithReplicate } from "./replicate";
 
@@ -33,25 +32,25 @@ export async function generateTenseAudioAssets(
     {
       name: "Tense Background Score",
       type: "music",
-      prompt: `A tense, cinematic ${genre} score. Based on this scene: ${safeScript}`,
+      prompt: `A suspenseful, cinematic score with low, pulsing synthesizers, deep cellos, and eerie string harmonics. The sound builds gradually with heartbeat-like percussion, echoing tension, and minor chord progressions. Inspired by classic ${genre} thriller soundtracks. Scene inspiration: ${safeScript}`,
       duration: "2:30",
-      description: "A low, pulsating score with eerie strings that builds tension and suspense.",
+      description: "A low, pulsating score with eerie strings and heartbeat-like drums that builds tension and suspense.",
       filename: "tense-score.mp3",
     },
     {
       name: "Flickering Bulb Hum",
       type: "ambient",
-      prompt: `Flickering fluorescent bulb with a soft ambient hum in a suspenseful ${genre} setting. Scene: ${safeScript}`,
+      prompt: `The distant hum of an old, flickering fluorescent bulb in an empty industrial space. Random flicker sounds with slight electronic buzz and background air tone. Some high-pitched whining and voltage irregularity. Set in a creepy ${genre} warehouse scene. Context: ${safeScript}`,
       duration: "2:00",
-      description: "The low hum of a flickering light bulb, creating unease.",
+      description: "The electrical buzz and uneven flickering sound of a faulty ceiling bulb creating an ominous hum in a large empty space.",
       filename: "bulb-hum.mp3",
     },
     {
       name: "Footsteps on Concrete",
       type: "sfx",
-      prompt: `Slow, echoing footsteps in an abandoned concrete hallway. Genre: ${genre}. Scene: ${safeScript}`,
+      prompt: `Heavy, slow footsteps on hard concrete in a narrow corridor. Each step is deliberate and echoes with metallic reverb, suggesting an abandoned facility. The sound has a slight drag and dust crunch with each footfall. Based on a ${genre} suspense scene. Context: ${safeScript}`,
       duration: "0:15",
-      description: "Heavy footsteps echoing on hard floor.",
+      description: "Slow, deliberate footsteps on a concrete floor that echo through an abandoned hallway, creating suspense.",
       filename: "footsteps.mp3",
     },
   ];
