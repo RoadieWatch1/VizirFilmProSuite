@@ -1,4 +1,5 @@
-// C:\Users\vizir\VizirPro\lib\audioGenerators.ts
+// lib/audioGenerators.ts
+
 import { uploadAudioFile } from "./firebaseUpload";
 import { generateAudioWithReplicate } from "./replicate";
 
@@ -12,14 +13,14 @@ export type SoundAsset = {
 };
 
 /**
- * Generates AI sound assets for a script and genre using Replicate AudioGen and uploads them to Firebase.
+ * Generates AI sound assets using Replicate AudioGen and uploads them to Firebase.
  */
 export async function generateTenseAudioAssets(
   script: string,
   genre: string
 ): Promise<SoundAsset[]> {
   const assets: SoundAsset[] = [];
-  const safeScript = script.slice(0, 1500); // Limit for API safety
+  const safeScript = script.slice(0, 1500); // Avoid token overflow
 
   const prompts: Array<{
     name: string;
@@ -70,13 +71,13 @@ export async function generateTenseAudioAssets(
         firebaseUrl = await uploadAudioFile(buffer, item.filename);
         console.log(`✅ Uploaded to Firebase: ${firebaseUrl}`);
       } catch (uploadErr) {
-        console.warn(`⚠️ Firebase upload failed for ${item.name}. Using Replicate URL instead.`, uploadErr);
+        console.warn(`⚠️ Firebase upload failed for ${item.name}. Falling back to Replicate URL.`, uploadErr);
       }
 
       const finalUrl = firebaseUrl || replicateUrl;
 
       if (!finalUrl) {
-        console.warn(`⚠️ No usable audio URL for ${item.name}. Skipping asset.`);
+        console.warn(`⚠️ No usable URL for ${item.name}. Skipping.`);
         continue;
       }
 
@@ -85,12 +86,11 @@ export async function generateTenseAudioAssets(
         type: item.type,
         duration: item.duration,
         description: item.description,
-        scenes: ["INT. ABANDONED WAREHOUSE - NIGHT"], // Replace with smarter logic later if desired
+        scenes: ["INT. ABANDONED WAREHOUSE - NIGHT"], // Placeholder scene
         audioUrl: finalUrl,
       });
 
       console.log(`✅ Added asset: ${item.name}`);
-
     } catch (err) {
       console.error(`❌ Failed to generate or upload audio for: ${item.name}`, err);
     }

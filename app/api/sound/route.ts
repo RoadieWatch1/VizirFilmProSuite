@@ -1,3 +1,4 @@
+// app/api/sound/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { generateTenseAudioAssets } from "@/lib/audioGenerators";
 
@@ -21,12 +22,16 @@ export async function POST(request: NextRequest) {
 
     const rawAssets = await generateTenseAudioAssets(script, genre);
 
-    // Filter out any failed assets
     const soundAssets = rawAssets.filter((a) => !!a.audioUrl);
 
     console.log("🎧 [API] Total generated:", rawAssets.length);
     rawAssets.forEach((a, i) => {
-      console.log(`  - Asset ${i + 1}: ${a.name}, URL: ${a.audioUrl || "❌ No URL"}`);
+      console.log(`  - Asset ${i + 1}: ${a.name}`);
+      if (a.audioUrl) {
+        console.log(`    ✅ URL: ${a.audioUrl}`);
+      } else {
+        console.warn(`    ❌ Failed to generate audio for "${a.name}"`);
+      }
     });
 
     return NextResponse.json({
@@ -39,7 +44,9 @@ export async function POST(request: NextRequest) {
     console.error("❌ [API] Sound generation error:", error);
     return NextResponse.json(
       {
-        error: error?.message || "Failed to generate sound assets. Please try again.",
+        success: false,
+        error: error?.message || "Unexpected error occurred during sound generation.",
+        details: error, // 🔍 include full object for debugging
       },
       { status: 500 }
     );
