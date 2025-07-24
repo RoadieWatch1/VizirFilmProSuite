@@ -37,16 +37,14 @@ export default function SoundPage() {
     setLoading(true);
     try {
       const res = await fetch("/api/sound", {
-
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-      body: JSON.stringify({
-  script: filmPackage.script,
-  genre: filmPackage.genre,
-}),
-
+        body: JSON.stringify({
+          script: filmPackage.script,
+          genre: filmPackage.genre,
+        }),
       });
 
       if (!res.ok) {
@@ -54,9 +52,12 @@ export default function SoundPage() {
       }
 
       const data = await res.json();
+      console.log("🎧 Generated SoundAssets:", data.soundAssets);
+
+      const cleanAssets = (data.soundAssets || []).filter((a: SoundAsset) => !!a.audioUrl);
 
       updateFilmPackage({
-        soundAssets: data.soundAssets || [],
+        soundAssets: cleanAssets,
       });
 
       alert("Sound assets generated successfully!");
@@ -76,9 +77,13 @@ export default function SoundPage() {
       if (audioRef.current) audioRef.current.pause();
     } else {
       setPlayingId(id);
-      if (audioRef.current) {
-        audioRef.current.src = audioUrl || "/dummy-sound.mp3";
-        audioRef.current.play();
+      if (audioUrl && audioRef.current) {
+        audioRef.current.src = audioUrl;
+        audioRef.current.play().catch((e) => {
+          console.error("❌ Audio playback error:", e);
+        });
+      } else {
+        console.warn("⚠️ No audio URL found for this asset.");
       }
     }
   };
@@ -105,21 +110,16 @@ export default function SoundPage() {
           <div className="max-w-4xl mx-auto">
             <div className="text-center mb-8">
               <Music className="w-16 h-16 text-[#FF6A00] mx-auto mb-4" />
-              <h1 className="text-3xl font-bold text-white mb-2">
-                Sound Library
-              </h1>
+              <h1 className="text-3xl font-bold text-white mb-2">Sound Library</h1>
               <p className="text-[#B2C8C9]">
                 Manage music, sound effects, and audio assets
               </p>
             </div>
 
             <Card className="glass-effect border-[#FF6A00]/20 p-8 text-center">
-              <h3 className="text-xl font-semibold text-white mb-4">
-                No Sound Assets Yet
-              </h3>
+              <h3 className="text-xl font-semibold text-white mb-4">No Sound Assets Yet</h3>
               <p className="text-[#B2C8C9] mb-6">
-                Generate sound recommendations based on your script or add
-                assets manually.
+                Generate sound recommendations based on your script or add assets manually.
               </p>
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <Button
@@ -155,12 +155,9 @@ export default function SoundPage() {
     <div className="min-h-screen cinematic-gradient">
       <div className="container mx-auto px-4 py-8">
         <div className="max-w-6xl mx-auto">
-          {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-8">
             <div>
-              <h1 className="text-3xl font-bold text-white mb-2">
-                Sound Library
-              </h1>
+              <h1 className="text-3xl font-bold text-white mb-2">Sound Library</h1>
               <p className="text-[#B2C8C9]">Audio assets and sound design</p>
             </div>
             <Button className="bg-[#FF6A00] hover:bg-[#E55A00] text-white mt-4 md:mt-0">
@@ -169,7 +166,6 @@ export default function SoundPage() {
             </Button>
           </div>
 
-          {/* Sound Assets */}
           <div className="space-y-4">
             {soundAssets.map((asset, index) => {
               const isPlaying = playingId === index.toString();
@@ -179,7 +175,6 @@ export default function SoundPage() {
                   className="glass-effect border-[#FF6A00]/20 p-6 hover-lift"
                 >
                   <div className="flex items-center space-x-4">
-                    {/* Waveform visualization */}
                     <div className="w-16 h-12 bg-[#032f30] rounded-lg flex items-center justify-center">
                       <div className="flex items-center space-x-1">
                         {[...Array(6)].map((_, i) => (
@@ -195,25 +190,16 @@ export default function SoundPage() {
                       </div>
                     </div>
 
-                    {/* Asset Info */}
                     <div className="flex-1">
                       <div className="flex items-center space-x-3 mb-2">
-                        <h3 className="text-lg font-semibold text-white">
-                          {asset.name}
-                        </h3>
-                        <Badge
-                          className={`${getTypeColor(asset.type)} border text-xs`}
-                        >
+                        <h3 className="text-lg font-semibold text-white">{asset.name}</h3>
+                        <Badge className={`${getTypeColor(asset.type)} border text-xs`}>
                           {asset.type}
                         </Badge>
-                        <span className="text-[#8da3a4] text-sm">
-                          {asset.duration}
-                        </span>
+                        <span className="text-[#8da3a4] text-sm">{asset.duration}</span>
                       </div>
 
-                      <p className="text-[#B2C8C9] text-base mb-2">
-                        {asset.description}
-                      </p>
+                      <p className="text-[#B2C8C9] text-base mb-2">{asset.description}</p>
 
                       {asset.scenes && (
                         <div className="flex flex-wrap gap-1">
@@ -228,9 +214,14 @@ export default function SoundPage() {
                           ))}
                         </div>
                       )}
+
+                      {!asset.audioUrl && (
+                        <p className="text-red-500 text-sm mt-1">
+                          ⚠️ Audio not available for this asset
+                        </p>
+                      )}
                     </div>
 
-                    {/* Play Button */}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -241,11 +232,7 @@ export default function SoundPage() {
                           : "text-[#8da3a4] hover:text-white hover:bg-[#14484a]"
                       }`}
                     >
-                      {isPlaying ? (
-                        <Pause className="w-5 h-5" />
-                      ) : (
-                        <Play className="w-5 h-5" />
-                      )}
+                      {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
                     </Button>
                   </div>
                 </Card>
@@ -253,12 +240,9 @@ export default function SoundPage() {
             })}
           </div>
 
-          {/* Sound Stats */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-8">
             <Card className="glass-effect border-[#FF6A00]/20 p-4 text-center">
-              <div className="text-2xl font-bold text-[#FF6A00]">
-                {soundAssets.length}
-              </div>
+              <div className="text-2xl font-bold text-[#FF6A00]">{soundAssets.length}</div>
               <div className="text-sm text-[#B2C8C9]">Total Assets</div>
             </Card>
             <Card className="glass-effect border-[#FF6A00]/20 p-4 text-center">
@@ -282,7 +266,6 @@ export default function SoundPage() {
           </div>
         </div>
       </div>
-      {/* Dummy audio element */}
       <audio ref={audioRef} hidden />
     </div>
   );

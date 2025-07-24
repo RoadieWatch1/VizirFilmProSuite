@@ -1,5 +1,4 @@
 // C:\Users\vizir\VizirPro\lib\audioGenerators.ts
-
 import { uploadAudioFile } from "./firebaseUpload";
 import { generateAudioWithReplicate } from "./replicate";
 
@@ -61,12 +60,24 @@ export async function generateTenseAudioAssets(
       console.log(`🎧 Generating audio for: ${item.name}`);
       const { buffer, audioUrl: replicateUrl } = await generateAudioWithReplicate(item.prompt);
 
+      if (!replicateUrl || !buffer) {
+        console.warn(`⚠️ Replicate returned no audio for ${item.name}. Skipping.`);
+        continue;
+      }
+
       let firebaseUrl = "";
       try {
         firebaseUrl = await uploadAudioFile(buffer, item.filename);
         console.log(`✅ Uploaded to Firebase: ${firebaseUrl}`);
       } catch (uploadErr) {
-        console.warn(`⚠️ Firebase upload failed for ${item.name}, using Replicate URL as fallback.`, uploadErr);
+        console.warn(`⚠️ Firebase upload failed for ${item.name}. Using Replicate URL instead.`, uploadErr);
+      }
+
+      const finalUrl = firebaseUrl || replicateUrl;
+
+      if (!finalUrl) {
+        console.warn(`⚠️ No usable audio URL for ${item.name}. Skipping asset.`);
+        continue;
       }
 
       assets.push({
@@ -74,13 +85,17 @@ export async function generateTenseAudioAssets(
         type: item.type,
         duration: item.duration,
         description: item.description,
-        scenes: ["INT. ABANDONED WAREHOUSE - NIGHT"],
-        audioUrl: firebaseUrl || replicateUrl,
+        scenes: ["INT. ABANDONED WAREHOUSE - NIGHT"], // Replace with smarter logic later if desired
+        audioUrl: finalUrl,
       });
+
+      console.log(`✅ Added asset: ${item.name}`);
+
     } catch (err) {
       console.error(`❌ Failed to generate or upload audio for: ${item.name}`, err);
     }
   }
 
+  console.log(`🎬 Final generated assets count: ${assets.length}`);
   return assets;
 }
