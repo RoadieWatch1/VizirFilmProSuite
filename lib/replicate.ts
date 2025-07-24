@@ -1,5 +1,4 @@
 // lib/replicate.ts
-
 export async function generateAudioWithReplicate(
   prompt: string
 ): Promise<{ buffer: ArrayBuffer; audioUrl: string }> {
@@ -11,7 +10,6 @@ export async function generateAudioWithReplicate(
     throw new Error("❌ [Replicate] Missing REPLICATE_API_TOKEN in environment variables.");
   }
 
-  // Submit generation request to Replicate
   const response = await fetch("https://api.replicate.com/v1/predictions", {
     method: "POST",
     headers: {
@@ -19,7 +17,7 @@ export async function generateAudioWithReplicate(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      version: "8db501a4571f51468c2e691c4d52b1a61e6e496a0d02bdbf0f838e5bf289b3eb", // Valid AudioGen version
+      version: "154b3e5141493cb1b8cec976d9aa90f2b691137e39ad906d2421b74c2a8c52b8", // ✅ sepal/audiogen
       input: {
         prompt,
         duration: 5,
@@ -30,7 +28,6 @@ export async function generateAudioWithReplicate(
 
   const prediction = await response.json();
 
-  // ✅ NEW: Log error if Replicate API call failed
   if (!response.ok) {
     console.error("❌ [Replicate] API Error Response:", prediction);
     throw new Error(
@@ -38,7 +35,6 @@ export async function generateAudioWithReplicate(
     );
   }
 
-  // ✅ NEW: Check if the polling URL exists
   if (!prediction?.urls?.get) {
     console.error("❌ [Replicate] Missing 'urls.get' in response:", prediction);
     throw new Error("Invalid Replicate response — missing status polling URL.");
@@ -50,7 +46,6 @@ export async function generateAudioWithReplicate(
   let attempts = 0;
   const maxAttempts = 30;
 
-  // Poll until the generation finishes
   while (attempts < maxAttempts) {
     const statusRes = await fetch(statusUrl, {
       headers: {
@@ -75,13 +70,12 @@ export async function generateAudioWithReplicate(
     attempts++;
   }
 
-  // ✅ Final validation of audio output
-  if (!result?.output?.[0]) {
+  if (!result?.output) {
     console.error("❌ [Replicate] No output returned:", result);
     throw new Error("No audio output returned from Replicate.");
   }
 
-  const audioUrl = result.output[0];
+  const audioUrl = result.output;
   console.log("🎧 [Replicate] Final audio URL:", audioUrl);
 
   const audioRes = await fetch(audioUrl);
