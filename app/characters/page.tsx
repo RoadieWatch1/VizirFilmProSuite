@@ -172,6 +172,17 @@ export default function CharactersPage() {
             })
           }
         />
+        <input
+          className="p-2 rounded bg-[#032f30] text-white col-span-2"
+          placeholder="Traits (comma separated)"
+          value={newCharacter.traits?.join(", ") || ""}
+          onChange={(e) =>
+            setNewCharacter({
+              ...newCharacter,
+              traits: e.target.value.split(",").map((t) => t.trim()),
+            })
+          }
+        />
         <div className="flex flex-col">
           <label className="text-sm text-[#B2C8C9]">Skin Color</label>
           <input
@@ -321,13 +332,27 @@ export default function CharactersPage() {
                   <img
                     src={character.imageUrl}
                     alt={character.name}
-                    className="w-full h-auto rounded aspect-video object-cover border border-[#FF6A00]/30"
+                    className="w-full h-auto rounded border border-[#FF6A00]/30"
                   />
                 )}
 
                 <p className="text-[#B2C8C9] text-sm leading-relaxed">
                   {character.description}
                 </p>
+
+                {character.traits && character.traits.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {character.traits.map((trait, i) => (
+                      <Badge
+                        key={i}
+                        variant="secondary"
+                        className="bg-[#032f30] text-[#B2C8C9]"
+                      >
+                        {trait}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
 
                 <div className="flex items-center gap-2 mt-2">
                   <span className="text-xs text-[#8da3a4]">Skin:</span>
@@ -359,7 +384,7 @@ export default function CharactersPage() {
                   disabled={loading}
                   className="mt-3 bg-[#FF6A00] hover:bg-[#E55A00] text-white w-full"
                 >
-                  {loading ? "Generating..." : "Generate Portrait"}
+                  {loading ? "Generating..." : character.imageUrl ? "Regenerate Portrait" : "Generate Portrait"}
                 </Button>
               </Card>
             ))}

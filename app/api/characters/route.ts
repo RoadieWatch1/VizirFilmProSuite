@@ -41,14 +41,14 @@ export async function POST(request: NextRequest) {
       const visualDescription = buildVisualDescription(character);
 
       // Compose a DALL·E prompt
-      const imagePrompt = `Full-body concept art portrait. ${visualDescription}. Cinematic style, high detail, color.`;
+      const imagePrompt = `Full-body character concept art. ${visualDescription}. Cinematic style, high detail, vibrant colors. Ensure full head and body are in frame, no cropping.`;
 
       // Call DALL·E 3
       const dalleImage = await openai.images.generate({
         model: "dall-e-3",
         prompt: imagePrompt,
         n: 1,
-        size: "1024x1024",
+        size: "1024x1792",
       });
 
       // ✅ SAFE: guarantee a string
