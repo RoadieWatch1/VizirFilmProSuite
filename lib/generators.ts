@@ -7,7 +7,7 @@ const openai = new OpenAI({
 
 // ---------- Helper for chat calls ----------
 
-async function callOpenAI(prompt: string): Promise<string> {
+async function callOpenAI(prompt: string, isJsonObject: boolean = true): Promise<string> {
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
@@ -74,29 +74,46 @@ Always fill imagePrompt with a short visual description. Leave imageUrl empty—
 }
 
 **When generating characters**, produce:
-[
-  {
-    "name": "...",
-    "role": "...",
-    "description": "...",
-    "traits": ["...", "..."]
-  }
-]
+{
+  "characters": [
+    {
+      "name": "...",
+      "role": "...",
+      "description": "...",
+      "traits": ["...", "..."]
+    }
+  ]
+}
 
 **When generating locations**, produce:
-[
-  {
-    "name": "...",
-    "type": "...",
-    "description": "...",
-    "scenes": ["...", "..."],
-    "rating": 4.5,
-    "cost": "$...",
-    "lowBudgetTips": "...",
-    "highBudgetOpportunities": "...",
-    "features": ["...", "..."]
-  }
-]
+{
+  "locations": [
+    {
+      "name": "...",
+      "type": "...",
+      "description": "...",
+      "scenes": ["...", "..."],
+      "rating": 4.5,
+      "cost": "$...",
+      "lowBudgetTips": "...",
+      "highBudgetOpportunities": "...",
+      "features": ["...", "..."]
+    }
+  ]
+}
+
+**When generating sound assets**, produce:
+{
+  "soundAssets": [
+    {
+      "name": "...",
+      "type": "...",
+      "duration": "...",
+      "description": "...",
+      "scenes": ["...", "..."]
+    }
+  ]
+}
 
 Always produce valid JSON without any extra commentary.
       `,
@@ -107,7 +124,7 @@ Always produce valid JSON without any extra commentary.
       },
     ],
     temperature: 0.7,
-    response_format: { type: "json_object" },
+    response_format: isJsonObject ? { type: "json_object" } : undefined,
   });
 
   return completion.choices[0].message.content ?? "";
@@ -193,12 +210,16 @@ ${script}
 
 Generate a list of 3-5 main characters.
 For each character, provide:
-- Name
-- Role (Protagonist, Antagonist, Supporting, etc.)
-- 1-sentence description
-- Key traits (3-5 words)
+- name (string)
+- role (Protagonist, Antagonist, Supporting, etc.)
+- description (1-sentence description)
+- traits (array of 3-5 strings)
+- skinColor (hex code, e.g. "#8C5D3C")
+- hairColor (hex code, e.g. "#1C1C1C")
+- clothingColor (hex code, e.g. "#A33C2F")
+- mood (string, e.g. "serious" or "playful")
 
-Format as JSON array.
+Output valid JSON as an object with key "characters" containing the array of objects. No extra text or commentary.
 `;
 
   const result = await callOpenAI(prompt);
@@ -207,19 +228,30 @@ Format as JSON array.
   try {
     const parsed = JSON.parse(result);
 
-    if (Array.isArray(parsed)) {
-      characters = parsed
+    const charArray = parsed.characters || parsed;
+
+    if (Array.isArray(charArray)) {
+      characters = charArray
         .filter(
           (char) =>
             typeof char?.name === "string" &&
             typeof char?.description === "string" &&
-            typeof char?.role === "string"
+            typeof char?.role === "string" &&
+            Array.isArray(char?.traits) &&
+            typeof char?.skinColor === "string" &&
+            typeof char?.hairColor === "string" &&
+            typeof char?.clothingColor === "string" &&
+            typeof char?.mood === "string"
         )
         .map((char) => ({
           name: char.name,
           role: char.role,
           description: char.description,
-          traits: Array.isArray(char.traits) ? char.traits : [],
+          traits: char.traits,
+          skinColor: char.skinColor,
+          hairColor: char.hairColor,
+          clothingColor: char.clothingColor,
+          mood: char.mood,
         }));
     }
   } catch (e) {
@@ -335,7 +367,7 @@ export const generateStoryboard = async ({
       (c) =>
         `Character: ${c.name}. Description: ${
           c.visualDescription || c.description || ""
-        }.`
+        }. Skin: ${c.skinColor || "default"}. Hair: ${c.hairColor || "default"}. Clothing: ${c.clothingColor || "default"}. Mood: ${c.mood || "neutral"}.`
     )
     .join("\n");
 
@@ -553,7 +585,7 @@ For each day, list:
 Format as JSON array.
 `;
 
-  const result = await callOpenAI(prompt);
+  const result = await callOpenAI(prompt, false); // Array, not object
 
   let schedule = [];
   try {
@@ -610,24 +642,7 @@ RULES:
   - highBudgetOpportunities (how to elevate production design)
 
 RESPONSE FORMAT:
-Return ONLY the following between tags:
-
-<<LOCATIONS>>
-[
-  {
-    "name": "EXT. PARK ENTRANCE - LATER",
-    "type": "Exterior",
-    "description": "A sunny public park with colorful signage and shaded walkways.",
-    "mood": "Joyful, playful",
-    "colorPalette": "Green, yellow, sky blue",
-    "propsOrFeatures": ["Park bench", "Rabbit hat", "Children's laughter"],
-    "scenes": ["Bobo performs a magic trick for the kids"],
-    "rating": 4.5,
-    "lowBudgetTips": "Film in a free public park with minimal crew.",
-    "highBudgetOpportunities": "Add extras, elaborate costumes, and cranes for wide shots."
-  }
-]
-<</LOCATIONS>>
+Return ONLY a valid JSON object with key "locations" containing the array of location objects. No extra text or commentary.
 `;
 
   const result = await callOpenAI(prompt);
@@ -637,13 +652,8 @@ Return ONLY the following between tags:
   let locations: any[] = [];
 
   try {
-    const jsonMatch = result.match(/<<LOCATIONS>>\s*(\[\s*{[\s\S]*?}\s*\])\s*<<\/LOCATIONS>>/);
-    if (jsonMatch && jsonMatch[1]) {
-      locations = JSON.parse(jsonMatch[1]);
-    } else {
-      console.error("⚠️ Could not extract location JSON from GPT result.");
-      locations = [];
-    }
+    const parsed = JSON.parse(result);
+    locations = parsed.locations || [];
   } catch (e) {
     console.error("❌ Failed to parse locations JSON:", e, result);
     locations = [];
@@ -672,14 +682,15 @@ For each asset, include:
 - description (provide a highly detailed, vivid description of the sound to enable accurate AI audio generation, including specific elements, tones, intensities, and how it fits the scene)
 - scenes where it appears
 
-Format as JSON array.
+Format as JSON object with key "soundAssets" containing the array.
 `;
 
   const result = await callOpenAI(prompt);
 
   let soundAssets = [];
   try {
-    soundAssets = JSON.parse(result);
+    const parsed = JSON.parse(result);
+    soundAssets = parsed.soundAssets || [];
   } catch (e) {
     console.error("Failed to parse sound assets JSON:", e, result);
     soundAssets = [];
