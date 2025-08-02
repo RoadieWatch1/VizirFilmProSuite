@@ -87,8 +87,38 @@ export default function CharactersPage() {
       }
 
       const data = await res.json();
-      updateFilmPackage({ characters: data.characters || [] });
-      alert("Characters generated successfully!");
+      let updatedCharacters = data.characters || [];
+
+      // Automatically generate portraits for each character
+      for (let index = 0; index < updatedCharacters.length; index++) {
+        const character = updatedCharacters[index];
+        if (!character.name || !character.description) continue;
+
+        const portraitRes = await fetch("/api/characters", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            step: "generate-portrait",
+            character,
+          }),
+        });
+
+        if (portraitRes.ok) {
+          const portraitData = await portraitRes.json();
+          updatedCharacters[index] = {
+            ...character,
+            imageUrl: portraitData.imageUrl,
+            visualDescription: portraitData.visualDescription,
+          };
+        } else {
+          console.error("Failed to generate portrait for character:", character.name);
+        }
+      }
+
+      updateFilmPackage({ characters: updatedCharacters });
+      alert("Characters and portraits generated successfully!");
     } catch (error) {
       console.error("Failed to generate characters:", error);
       alert("Failed to generate characters. Please try again.");

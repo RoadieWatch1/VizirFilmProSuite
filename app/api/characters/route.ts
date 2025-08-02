@@ -8,6 +8,23 @@ const openai = new OpenAI({
 
 export const dynamic = "force-dynamic";
 
+async function generatePortrait(character: any) {
+  const visualDescription = buildVisualDescription(character);
+
+  const imagePrompt = `Full-body character concept art. ${visualDescription}. Cinematic style, high detail, vibrant colors. Ensure full head and body are in frame, no cropping.`;
+
+  const dalleImage = await openai.images.generate({
+    model: "dall-e-3",
+    prompt: imagePrompt,
+    n: 1,
+    size: "1024x1792",
+  });
+
+  const imageUrl = dalleImage.data?.[0]?.url || "";
+
+  return { imageUrl, visualDescription };
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -25,8 +42,22 @@ export async function POST(request: NextRequest) {
       // Call your generator function
       const result = await generateCharacters(scriptContent, genre);
 
-      // Expecting result like: { characters: [...] }
-      return NextResponse.json(result);
+      let characters = result.characters || [];
+
+      // Generate portraits for each character
+      for (let i = 0; i < characters.length; i++) {
+        try {
+          const { imageUrl, visualDescription } = await generatePortrait(characters[i]);
+          characters[i].imageUrl = imageUrl;
+          characters[i].visualDescription = visualDescription;
+        } catch (err) {
+          console.error("Failed to generate portrait for character:", characters[i]?.name, err);
+          characters[i].imageUrl = "";
+          characters[i].visualDescription = "";
+        }
+      }
+
+      return NextResponse.json({ characters });
     }
 
     if (step === "generate-portrait") {
@@ -37,22 +68,7 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Build a consistent visual description
-      const visualDescription = buildVisualDescription(character);
-
-      // Compose a DALL·E prompt
-      const imagePrompt = `Full-body character concept art. ${visualDescription}. Cinematic style, high detail, vibrant colors. Ensure full head and body are in frame, no cropping.`;
-
-      // Call DALL·E 3
-      const dalleImage = await openai.images.generate({
-        model: "dall-e-3",
-        prompt: imagePrompt,
-        n: 1,
-        size: "1024x1792",
-      });
-
-      // ✅ SAFE: guarantee a string
-      const imageUrl = dalleImage.data?.[0]?.url || "";
+      const { imageUrl, visualDescription } = await generatePortrait(character);
 
       return NextResponse.json({
         imageUrl,
