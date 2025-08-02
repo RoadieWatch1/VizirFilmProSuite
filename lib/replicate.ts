@@ -1,7 +1,9 @@
 // lib/replicate.ts
 
 export async function generateAudioWithReplicate(
-  prompt: string
+  prompt: string,
+  duration: number = 10, // Increased default to max for AudioGen
+  modelVersion: string = "154b3e5141493cb1b8cec976d9aa90f2b691137e39ad906d2421b74c2a8c52b8" // Default to AudioGen
 ): Promise<{ buffer: ArrayBuffer; audioUrl: string }> {
   console.log("📡 [Replicate] Starting audio generation for prompt:", prompt);
 
@@ -11,7 +13,7 @@ export async function generateAudioWithReplicate(
     throw new Error("❌ [Replicate] Missing REPLICATE_API_TOKEN in environment variables.");
   }
 
-  // Call the sepal/audiogen model
+  // Call the specified model
   const response = await fetch("https://api.replicate.com/v1/predictions", {
     method: "POST",
     headers: {
@@ -19,10 +21,10 @@ export async function generateAudioWithReplicate(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      version: "154b3e5141493cb1b8cec976d9aa90f2b691137e39ad906d2421b74c2a8c52b8", // ✅ sepal/audiogen
+      version: modelVersion,
       input: {
         prompt,
-        duration: 5,
+        duration,
         output_format: "mp3",
       },
     }),
@@ -43,7 +45,7 @@ export async function generateAudioWithReplicate(
 
   let result;
   let attempts = 0;
-  const maxAttempts = 30;
+  const maxAttempts = 60; // Increased for longer generations
 
   while (attempts < maxAttempts) {
     const statusRes = await fetch(statusUrl, {

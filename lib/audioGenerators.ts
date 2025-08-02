@@ -12,9 +12,12 @@ export type SoundAsset = {
   audioUrl: string;
 };
 
+const AUDIOGEN_VERSION = "154b3e5141493cb1b8cec976d9aa90f2b691137e39ad906d2421b74c2a8c52b8"; // sepal/audiogen
+const MUSICGEN_VERSION = "7a76a8258b23fae65c5a22debb8841d1d7e816b75c2f24218cd2bd8573787906"; // meta/musicgen
+
 /**
  * Generates AI sound assets dynamically based on the script and genre using OpenAI for asset ideas,
- * then Replicate AudioGen for audio generation, and uploads them to Firebase.
+ * then appropriate Replicate model for audio generation (MusicGen for music, AudioGen for others), and uploads them to Firebase.
  */
 export async function generateAudioAssets(
   script: string,
@@ -45,21 +48,35 @@ export async function generateAudioAssets(
       let prompt = `${item.description}. `;
       switch (item.type) {
         case "music":
-          prompt += `A cinematic ${genre} score with appropriate instruments and tempo. `;
+          prompt += `A cinematic ${genre} music track with appropriate instruments, melody, and tempo. `;
           break;
         case "ambient":
-          prompt += `Ambient sounds for a ${genre} setting, including background tones and atmosphere. `;
+          prompt += `Ambient sounds for a ${genre} setting, including detailed background tones, atmospheres, and subtle noises. `;
           break;
         case "sfx":
-          prompt += `Specific sound effects for actions in a ${genre} context. `;
+          prompt += `Specific sound effects for actions in a ${genre} context, with clear and distinct audio elements. `;
           break;
         case "dialogue":
-          prompt += `Spoken dialogue or voice elements in a ${genre} style. `;
+          prompt += `Spoken dialogue in a ${genre} style, with clear enunciation and appropriate tone. Note: For best results, describe the voice and words precisely. `;
           break;
       }
-      prompt += `Inspired by ${genre} films. Scene context: ${safeScript.slice(0, 500)}.`;
+      prompt += `Inspired by classic ${genre} films. Highly detailed for accuracy. Scene context: ${safeScript}.`; // Use full safeScript for more context
 
-      const { buffer, audioUrl: replicateUrl } = await generateAudioWithReplicate(prompt);
+      // Choose model and duration based on type
+      let modelVersion = AUDIOGEN_VERSION;
+      let genDuration = 10; // Max for AudioGen
+      if (item.type === "music") {
+        modelVersion = MUSICGEN_VERSION;
+        genDuration = 30; // Max for MusicGen
+      } else if (item.type === "dialogue" || item.type === "sfx") {
+        genDuration = 5; // Shorter for SFX and dialogue
+      }
+
+      const { buffer, audioUrl: replicateUrl } = await generateAudioWithReplicate(
+        prompt,
+        genDuration,
+        modelVersion
+      );
 
       if (!replicateUrl || !buffer) {
         console.warn(`⚠️ Replicate returned no audio for ${item.name}. Skipping.`);
@@ -85,7 +102,7 @@ export async function generateAudioAssets(
       assets.push({
         name: item.name,
         type: item.type,
-        duration: item.duration,
+        duration: item.duration, // Keep the metadata duration
         description: item.description,
         scenes: item.scenes || ["Various Scenes"], // Fallback if missing
         audioUrl: finalUrl,

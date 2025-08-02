@@ -647,6 +647,7 @@ Return ONLY the following between tags:
   return { locations };
 };
 
+
 // ---------- Sound Assets ----------
 
 export const generateSoundAssets = async (
@@ -663,7 +664,7 @@ For each asset, include:
 - name
 - type (music, sfx, dialogue, ambient)
 - duration
-- description
+- description (provide a highly detailed, vivid description of the sound to enable accurate AI audio generation, including specific elements, tones, intensities, and how it fits the scene)
 - scenes where it appears
 
 Format as JSON array.
