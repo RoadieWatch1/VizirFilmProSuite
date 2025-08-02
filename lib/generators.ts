@@ -110,7 +110,19 @@ Always produce valid JSON without any extra commentary.
     response_format: { type: "json_object" },
   });
 
-  return completion.choices[0].message.content ?? "";
+  let content = completion.choices[0].message.content ?? "";
+  
+  // Clean potential markdown wrappers
+  content = content.trim();
+  if (content.startsWith("```json")) {
+    content = content.slice(7);
+  }
+  if (content.endsWith("```")) {
+    content = content.slice(0, -3);
+  }
+  content = content.trim();
+
+  return content;
 }
 
 // ---------- GENERATORS ----------
@@ -193,14 +205,10 @@ ${script}
 
 Generate a list of 3-5 main characters.
 For each character, provide:
-- name (string)
-- role (Protagonist, Antagonist, Supporting, etc.)
-- description (1-sentence description)
-- traits (array of 3-5 strings)
-- skinColor (hex code, e.g. "#8C5D3C")
-- hairColor (hex code, e.g. "#1C1C1C")
-- clothingColor (hex code, e.g. "#A33C2F")
-- mood (string, e.g. "serious" or "playful")
+- Name
+- Role (Protagonist, Antagonist, Supporting, etc.)
+- 1-sentence description
+- Key traits (3-5 words)
 
 Format as JSON array.
 `;
@@ -217,22 +225,13 @@ Format as JSON array.
           (char: any) =>
             typeof char?.name === "string" &&
             typeof char?.description === "string" &&
-            typeof char?.role === "string" &&
-            Array.isArray(char?.traits) &&
-            typeof char?.skinColor === "string" &&
-            typeof char?.hairColor === "string" &&
-            typeof char?.clothingColor === "string" &&
-            typeof char?.mood === "string"
+            typeof char?.role === "string"
         )
         .map((char: any) => ({
           name: char.name,
           role: char.role,
           description: char.description,
-          traits: char.traits,
-          skinColor: char.skinColor,
-          hairColor: char.hairColor,
-          clothingColor: char.clothingColor,
-          mood: char.mood,
+          traits: Array.isArray(char.traits) ? char.traits : [],
         }));
     }
   } catch (e) {
@@ -240,57 +239,10 @@ Format as JSON array.
     characters = [];
   }
 
-  // Generate images for each character
-  for (let i = 0; i < characters.length; i++) {
-    const char = characters[i];
-    const visualDescription = buildVisualDescription(char);
-    const imagePrompt = `Full-body character concept art. ${visualDescription}. Cinematic style, high detail, color.`;
-
-    try {
-      const dalleImage = await openai.images.generate({
-        model: "dall-e-3",
-        prompt: imagePrompt,
-        n: 1,
-        size: "1024x1792",
-      });
-
-      characters[i].imageUrl = dalleImage.data?.[0]?.url || "";
-      characters[i].visualDescription = visualDescription;
-    } catch (err) {
-      console.error("Failed to generate image for character:", char.name, err);
-      characters[i].imageUrl = "";
-      characters[i].visualDescription = visualDescription;
-    }
-  }
-
-  console.log("Generated characters with images:", characters);
+  console.log("Generated characters:", characters);
 
   return { characters };
 };
-
-function buildVisualDescription(character: Character): string {
-  const {
-    name,
-    description,
-    role,
-    mood,
-    skinColor,
-    hairColor,
-    clothingColor,
-  } = character;
-
-  return [
-    `Character name: ${name}`,
-    `Description: ${description}`,
-    role ? `Role: ${role}` : "",
-    mood ? `Mood: ${mood}` : "",
-    skinColor ? `Skin color: ${skinColor}` : "",
-    hairColor ? `Hair color: ${hairColor}` : "",
-    clothingColor ? `Clothing color: ${clothingColor}` : "",
-  ]
-    .filter(Boolean)
-    .join(". ");
-}
 
 export const generateConcept = async (
   script: string,
