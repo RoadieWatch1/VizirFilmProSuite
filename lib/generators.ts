@@ -7,7 +7,7 @@ const openai = new OpenAI({
 
 // ---------- Helper for chat calls ----------
 
-async function callOpenAI(prompt: string, isJsonObject: boolean = true): Promise<string> {
+async function callOpenAI(prompt: string): Promise<string> {
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
@@ -74,46 +74,29 @@ Always fill imagePrompt with a short visual description. Leave imageUrl empty—
 }
 
 **When generating characters**, produce:
-{
-  "characters": [
-    {
-      "name": "...",
-      "role": "...",
-      "description": "...",
-      "traits": ["...", "..."]
-    }
-  ]
-}
+[
+  {
+    "name": "...",
+    "role": "...",
+    "description": "...",
+    "traits": ["...", "..."]
+  }
+]
 
 **When generating locations**, produce:
-{
-  "locations": [
-    {
-      "name": "...",
-      "type": "...",
-      "description": "...",
-      "scenes": ["...", "..."],
-      "rating": 4.5,
-      "cost": "$...",
-      "lowBudgetTips": "...",
-      "highBudgetOpportunities": "...",
-      "features": ["...", "..."]
-    }
-  ]
-}
-
-**When generating sound assets**, produce:
-{
-  "soundAssets": [
-    {
-      "name": "...",
-      "type": "...",
-      "duration": "...",
-      "description": "...",
-      "scenes": ["...", "..."]
-    }
-  ]
-}
+[
+  {
+    "name": "...",
+    "type": "...",
+    "description": "...",
+    "scenes": ["...", "..."],
+    "rating": 4.5,
+    "cost": "$...",
+    "lowBudgetTips": "...",
+    "highBudgetOpportunities": "...",
+    "features": ["...", "..."]
+  }
+]
 
 Always produce valid JSON without any extra commentary.
       `,
@@ -124,7 +107,7 @@ Always produce valid JSON without any extra commentary.
       },
     ],
     temperature: 0.7,
-    response_format: isJsonObject ? { type: "json_object" } : undefined,
+    response_format: { type: "json_object" },
   });
 
   return completion.choices[0].message.content ?? "";
@@ -210,16 +193,12 @@ ${script}
 
 Generate a list of 3-5 main characters.
 For each character, provide:
-- name (string)
-- role (Protagonist, Antagonist, Supporting, etc.)
-- description (1-sentence description)
-- traits (array of 3-5 strings)
-- skinColor (hex code, e.g. "#8C5D3C")
-- hairColor (hex code, e.g. "#1C1C1C")
-- clothingColor (hex code, e.g. "#A33C2F")
-- mood (string, e.g. "serious" or "playful")
+- Name
+- Role (Protagonist, Antagonist, Supporting, etc.)
+- 1-sentence description
+- Key traits (3-5 words)
 
-Output valid JSON as an object with key "characters" containing the array of objects. No extra text or commentary.
+Format as JSON array.
 `;
 
   const result = await callOpenAI(prompt);
@@ -228,30 +207,19 @@ Output valid JSON as an object with key "characters" containing the array of obj
   try {
     const parsed = JSON.parse(result);
 
-    const charArray = parsed.characters || parsed;
-
-    if (Array.isArray(charArray)) {
-      characters = charArray
+    if (Array.isArray(parsed)) {
+      characters = parsed
         .filter(
-          (char) =>
+          (char: any) =>
             typeof char?.name === "string" &&
             typeof char?.description === "string" &&
-            typeof char?.role === "string" &&
-            Array.isArray(char?.traits) &&
-            typeof char?.skinColor === "string" &&
-            typeof char?.hairColor === "string" &&
-            typeof char?.clothingColor === "string" &&
-            typeof char?.mood === "string"
+            typeof char?.role === "string"
         )
-        .map((char) => ({
+        .map((char: any) => ({
           name: char.name,
           role: char.role,
           description: char.description,
-          traits: char.traits,
-          skinColor: char.skinColor,
-          hairColor: char.hairColor,
-          clothingColor: char.clothingColor,
-          mood: char.mood,
+          traits: Array.isArray(char.traits) ? char.traits : [],
         }));
     }
   } catch (e) {
@@ -367,58 +335,56 @@ export const generateStoryboard = async ({
       (c) =>
         `Character: ${c.name}. Description: ${
           c.visualDescription || c.description || ""
-        }. Skin: ${c.skinColor || "default"}. Hair: ${c.hairColor || "default"}. Clothing: ${c.clothingColor || "default"}. Mood: ${c.mood || "neutral"}.`
+        }.`
     )
     .join("\n");
 
   const prompt = `
-You are a professional storyboard artist creating a high-quality film storyboard.
+You are a professional storyboard artist.
 
 Film Idea: ${movieIdea}
 Genre: ${movieGenre}
 Script:
 ${script}
 
-Characters for visual consistency (include their appearances in all relevant image prompts):
+Characters for visual consistency:
 ${characterBlock}
 
-Break the script into exactly ${numImages} key scenes chronologically, covering the main plot beats from beginning to end. For each scene, generate a main storyboard frame using professional conventions: varied shot compositions, dynamic angles, and ties to narrative tension.
+Generate exactly ${numImages} storyboard frames in JSON array format.
 
-Generate a JSON object with key "storyboard" containing an array of exactly ${numImages} frame objects.
-
-For each frame, include ALL these fields:
-- scene (short professional title, e.g., "INT. WAREHOUSE CONFRONTATION - NIGHT")
-- shotNumber (e.g., "1A", increment sequentially)
-- description (2-3 detailed sentences on visuals, action, and dramatic intent)
-- cameraAngle (e.g., "Low Angle Wide Shot" for power dynamics)
-- cameraMovement (e.g., "Slow Dolly In" or "Static" if none)
-- lens (e.g., "Wide 24mm" for establishing shots)
-- lighting (e.g., "Harsh shadows from overhead fluorescents, cool blue tones for suspense")
-- duration (e.g., "5 seconds")
-- dialogue (key lines spoken, if any)
-- soundEffects (notable audio cues, e.g., "Echoing footsteps")
-- notes (directorial notes, e.g., "Build tension with close framing")
-- imagePrompt (detailed 1-2 sentence visual description for DALL-E: include setting details, character appearances/actions/expressions, composition, mood, genre style—e.g., "A tense low-angle wide shot of [character description] confronting [another] in a dimly lit warehouse, harsh shadows on faces, industrial background with flickering lights, comic-book style black-and-white pencil sketch")
+For each frame, generate ALL of these fields:
+- scene (short title)
+- shotNumber (e.g. "23A")
+- description (2-3 sentences describing the visual and dramatic content)
+- cameraAngle (e.g. "Close-Up," "Wide Shot")
+- cameraMovement (describe camera movement, if any)
+- lens (optional, e.g. "35mm lens")
+- lighting (mood, color, intensity)
+- duration (e.g. "4 seconds")
+- dialogue (spoken lines in the shot, if any)
+- soundEffects (notable sounds in this shot)
+- notes (technical or creative notes)
+- imagePrompt (one-sentence visual description suitable for DALL-E)
 - imageUrl (leave empty)
 
-For each frame, also generate exactly 4 coverageShots (alternative angles for editing coverage in the same scene). Coverage shots provide variety: e.g., 1. Extreme close-up on face/emotion, 2. Over-the-shoulder for dialogue, 3. Medium reaction shot, 4. Dutch angle or special effect for tension (adapt to scene).
+IMPORTANT: For each frame, also generate exactly 6 coverageShots.
 
-coverageShots is an array of 4 objects, each with ALL the same fields as a main frame (including unique imagePrompt tailored to the angle). Do not skip or leave empty.
+For coverageShots:
+- coverageShots must be an array of 6 objects.
+- Each coverageShot must include ALL the same fields listed above for a frame.
+- Do not skip coverageShots.
+- Never return empty arrays for coverageShots.
 
-All images are black-and-white pencil sketches in a professional comic-book storyboard style.
+Images should be black-and-white pencil sketches in a comic-book storyboard style.
 
-Return ONLY the valid JSON object like { "storyboard": [ ... ] }, no other text.
+Return a valid JSON array.
 `;
 
   const result = await callOpenAI(prompt);
 
   let frames: StoryboardFrame[] = [];
   try {
-    const parsed = JSON.parse(result);
-    frames = parsed.storyboard || [];
-    if (!Array.isArray(frames) || frames.length !== numImages) {
-      console.warn(`Storyboard generated ${frames.length} frames instead of ${numImages}.`);
-    }
+    frames = JSON.parse(result);
   } catch (e) {
     console.error("Failed to parse storyboard JSON:", e, result);
     frames = [];
@@ -431,7 +397,7 @@ Return ONLY the valid JSON object like { "storyboard": [ ... ] }, no other text.
       try {
         const dalleImage = await openai.images.generate({
           model: "dall-e-3",
-          prompt: `${frame.imagePrompt}. Professional comic-book style black-and-white pencil sketch.`,
+          prompt: `${frame.imagePrompt}. Comic-book style black-and-white pencil sketch.`,
           n: 1,
           size: "1024x1024",
         });
@@ -454,7 +420,7 @@ Return ONLY the valid JSON object like { "storyboard": [ ... ] }, no other text.
           try {
             const dalleImage = await openai.images.generate({
               model: "dall-e-3",
-              prompt: `${shot.imagePrompt}. Professional comic-book style black-and-white pencil sketch.`,
+              prompt: `${shot.imagePrompt}. Comic-book style black-and-white pencil sketch.`,
               n: 1,
               size: "512x512",
             });
@@ -478,16 +444,16 @@ Return ONLY the valid JSON object like { "storyboard": [ ... ] }, no other text.
 
 function determineNumberOfImages(scriptLength: string): number {
   const mins = parseInt(scriptLength.replace(/\D/g, ""), 10);
-  if (isNaN(mins)) return 6;
+  if (isNaN(mins)) return 4;
 
-  if (mins <= 1) return 3;
-  if (mins <= 5) return 6;
-  if (mins <= 10) return 8;
-  if (mins <= 15) return 10;
-  if (mins <= 30) return 15;
-  if (mins <= 60) return 25;
-  if (mins <= 120) return 40;
-  return 6;
+  if (mins <= 1) return 2;
+  if (mins <= 5) return 4;
+  if (mins <= 10) return 6;
+  if (mins <= 15) return 8;
+  if (mins <= 30) return 12;
+  if (mins <= 60) return 20;
+  if (mins <= 120) return 35;
+  return 4;
 }
 
 // ---------- Budget ----------
@@ -585,7 +551,7 @@ For each day, list:
 Format as JSON array.
 `;
 
-  const result = await callOpenAI(prompt, false); // Array, not object
+  const result = await callOpenAI(prompt);
 
   let schedule = [];
   try {
@@ -642,7 +608,7 @@ RULES:
   - highBudgetOpportunities (how to elevate production design)
 
 RESPONSE FORMAT:
-Return ONLY a valid JSON object with key "locations" containing the array of location objects. No extra text or commentary.
+Return ONLY the valid JSON object with key "locations" containing the array of location objects. No extra text or commentary.
 `;
 
   const result = await callOpenAI(prompt);
@@ -682,15 +648,14 @@ For each asset, include:
 - description (provide a highly detailed, vivid description of the sound to enable accurate AI audio generation, including specific elements, tones, intensities, and how it fits the scene)
 - scenes where it appears
 
-Format as JSON object with key "soundAssets" containing the array.
+Format as JSON array.
 `;
 
   const result = await callOpenAI(prompt);
 
   let soundAssets = [];
   try {
-    const parsed = JSON.parse(result);
-    soundAssets = parsed.soundAssets || [];
+    soundAssets = JSON.parse(result);
   } catch (e) {
     console.error("Failed to parse sound assets JSON:", e, result);
     soundAssets = [];
