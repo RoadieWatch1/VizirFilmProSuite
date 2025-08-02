@@ -1,6 +1,6 @@
 // app/api/sound/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { generateTenseAudioAssets } from "@/lib/audioGenerators";
+import { generateAudioAssets } from "@/lib/audioGenerators"; // Updated to use the new function
 
 export async function POST(request: NextRequest) {
   try {
@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
     console.log("🧠 [API] Generating with genre:", genre);
     console.log("📝 [API] Using script preview:", script.slice(0, 100) + "...");
 
-    const rawAssets = await generateTenseAudioAssets(script, genre);
+    const rawAssets = await generateAudioAssets(script, genre); // Updated function call
 
     const soundAssets = rawAssets.filter((a) => !!a.audioUrl);
 

@@ -1,6 +1,7 @@
 // lib/audioGenerators.ts
 import { uploadAudioFile } from "./firebaseUpload";
 import { generateAudioWithReplicate } from "./replicate";
+import { generateSoundAssets } from "./generators"; // Import the dynamic generator
 
 export type SoundAsset = {
   name: string;
@@ -12,53 +13,53 @@ export type SoundAsset = {
 };
 
 /**
- * Generates AI sound assets using Replicate AudioGen and uploads them to Firebase.
+ * Generates AI sound assets dynamically based on the script and genre using OpenAI for asset ideas,
+ * then Replicate AudioGen for audio generation, and uploads them to Firebase.
  */
-export async function generateTenseAudioAssets(
+export async function generateAudioAssets(
   script: string,
   genre: string
 ): Promise<SoundAsset[]> {
   const assets: SoundAsset[] = [];
   const safeScript = script.slice(0, 1500); // Avoid token overflow
 
-  const prompts: Array<{
-    name: string;
-    type: "music" | "ambient" | "sfx" | "dialogue";
-    prompt: string;
-    duration: string;
-    description: string;
-    filename: string;
-  }> = [
+  // Step 1: Dynamically generate sound asset ideas using OpenAI
+  const { soundAssets: generatedIdeas } = await generateSoundAssets(script, genre);
+  
+  // Ensure we have ideas, fallback to a minimal set if none generated
+  const ideas = generatedIdeas.length > 0 ? generatedIdeas : [
     {
-      name: "Tense Background Score",
-      type: "music",
-      prompt: `A suspenseful, cinematic score with low, pulsing synthesizers, deep cellos, and eerie string harmonics. The sound builds gradually with heartbeat-like percussion, echoing tension, and minor chord progressions. Inspired by classic ${genre} thriller soundtracks. Scene inspiration: ${safeScript}`,
+      name: "Background Score",
+      type: "music" as const,
       duration: "2:30",
-      description: "A low, pulsating score with eerie strings and heartbeat-like drums that builds tension and suspense.",
-      filename: "tense-score.mp3",
-    },
-    {
-      name: "Flickering Bulb Hum",
-      type: "ambient",
-      prompt: `The distant hum of an old, flickering fluorescent bulb in an empty industrial space. Random flicker sounds with slight electronic buzz and background air tone. Some high-pitched whining and voltage irregularity. Set in a creepy ${genre} warehouse scene. Context: ${safeScript}`,
-      duration: "2:00",
-      description: "The electrical buzz and uneven flickering sound of a faulty ceiling bulb creating an ominous hum in a large empty space.",
-      filename: "bulb-hum.mp3",
-    },
-    {
-      name: "Footsteps on Concrete",
-      type: "sfx",
-      prompt: `Heavy, slow footsteps on hard concrete in a narrow corridor. Each step is deliberate and echoes with metallic reverb, suggesting an abandoned facility. The sound has a slight drag and dust crunch with each footfall. Based on a ${genre} suspense scene. Context: ${safeScript}`,
-      duration: "0:15",
-      description: "Slow, deliberate footsteps on a concrete floor that echo through an abandoned hallway, creating suspense.",
-      filename: "footsteps.mp3",
+      description: "A fitting score based on the script's mood.",
+      scenes: ["Main Scene"],
     },
   ];
 
-  for (const item of prompts) {
+  for (const item of ideas) {
     try {
       console.log(`🎧 Generating audio for: ${item.name}`);
-      const { buffer, audioUrl: replicateUrl } = await generateAudioWithReplicate(item.prompt);
+
+      // Step 2: Create a dynamic prompt based on the generated idea, genre, and script
+      let prompt = `${item.description}. `;
+      switch (item.type) {
+        case "music":
+          prompt += `A cinematic ${genre} score with appropriate instruments and tempo. `;
+          break;
+        case "ambient":
+          prompt += `Ambient sounds for a ${genre} setting, including background tones and atmosphere. `;
+          break;
+        case "sfx":
+          prompt += `Specific sound effects for actions in a ${genre} context. `;
+          break;
+        case "dialogue":
+          prompt += `Spoken dialogue or voice elements in a ${genre} style. `;
+          break;
+      }
+      prompt += `Inspired by ${genre} films. Scene context: ${safeScript.slice(0, 500)}.`;
+
+      const { buffer, audioUrl: replicateUrl } = await generateAudioWithReplicate(prompt);
 
       if (!replicateUrl || !buffer) {
         console.warn(`⚠️ Replicate returned no audio for ${item.name}. Skipping.`);
@@ -67,7 +68,8 @@ export async function generateTenseAudioAssets(
 
       let firebaseUrl = "";
       try {
-        firebaseUrl = await uploadAudioFile(buffer, item.filename);
+        const filename = `${item.name.toLowerCase().replace(/\s/g, "-")}.mp3`;
+        firebaseUrl = await uploadAudioFile(buffer, filename);
         console.log(`✅ Uploaded to Firebase: ${firebaseUrl}`);
       } catch (uploadErr) {
         console.warn(`⚠️ Firebase upload failed for ${item.name}. Falling back to Replicate URL.`, uploadErr);
@@ -85,7 +87,7 @@ export async function generateTenseAudioAssets(
         type: item.type,
         duration: item.duration,
         description: item.description,
-        scenes: ["INT. ABANDONED WAREHOUSE - NIGHT"], // Placeholder scene
+        scenes: item.scenes || ["Various Scenes"], // Fallback if missing
         audioUrl: finalUrl,
       });
 
