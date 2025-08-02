@@ -45,10 +45,7 @@ export default function StoryboardPage() {
           movieIdea: filmPackage.idea,
           movieGenre: filmPackage.genre,
           scriptLength: filmPackage.length || "5 min",
-          script:
-            filmPackage.shortScript && filmPackage.shortScript.length > 0
-              ? JSON.stringify(filmPackage.shortScript, null, 2)
-              : filmPackage.script || "",
+          script: filmPackage.script || "",
           characters: filmPackage.characters || [],
         }),
       });
