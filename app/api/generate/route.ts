@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  generateScript,
+  generateCharacters, // FIXED: Added missing import for generateCharacters
   generateStoryboard,
   generateConcept,
   generateBudget,
@@ -12,8 +14,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-// 🔹 Generate script, logline, synopsis
-async function generateScript(
+async function generateScriptData(
   movieIdea: string,
   movieGenre: string,
   scriptLength: string
@@ -25,9 +26,7 @@ async function generateScript(
     scriptText,
     shortScript,
     themes,
-  } = await import("@/lib/generators").then((mod) =>
-    mod.generateScript(movieIdea, movieGenre, scriptLength)
-  );
+  } = await generateScript(movieIdea, movieGenre, scriptLength);
 
   return {
     logline,
@@ -40,19 +39,9 @@ async function generateScript(
   };
 }
 
-// 🔹 Generate characters only
-async function generateCharacters(scriptContent: string, genre: string) {
-  const { characters } = await import("@/lib/generators").then((mod) =>
-    mod.generateCharacters(scriptContent, genre)
-  );
-
-  return { characters };
-}
-
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-
     const {
       movieIdea,
       movieGenre,
@@ -181,7 +170,7 @@ export async function POST(request: NextRequest) {
       }
 
       default: {
-        const scriptResult = await generateScript(
+        const scriptResult = await generateScriptData(
           movieIdea || "",
           movieGenre || "",
           scriptLength || ""

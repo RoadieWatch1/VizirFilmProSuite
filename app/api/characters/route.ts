@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
-import { generateCharacters } from "@/lib/generators"; // ← adjust this path if needed
+import { generateCharacters } from "@/lib/generators";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -8,27 +8,9 @@ const openai = new OpenAI({
 
 export const dynamic = "force-dynamic";
 
-async function generatePortrait(character: any) {
-  const visualDescription = buildVisualDescription(character);
-
-  const imagePrompt = `Full-body character concept art. ${visualDescription}. Cinematic style, high detail, vibrant colors. Ensure full head and body are in frame, no cropping.`;
-
-  const dalleImage = await openai.images.generate({
-    model: "dall-e-3",
-    prompt: imagePrompt,
-    n: 1,
-    size: "1024x1792",
-  });
-
-  const imageUrl = dalleImage.data?.[0]?.url || "";
-
-  return { imageUrl, visualDescription };
-}
-
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-
     const { step, character, scriptContent, genre } = body;
 
     if (step === "generate-characters") {
@@ -39,25 +21,9 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Call your generator function
       const result = await generateCharacters(scriptContent, genre);
-
-      let characters = result.characters || [];
-
-      // Generate portraits for each character
-      for (let i = 0; i < characters.length; i++) {
-        try {
-          const { imageUrl, visualDescription } = await generatePortrait(characters[i]);
-          characters[i].imageUrl = imageUrl;
-          characters[i].visualDescription = visualDescription;
-        } catch (err) {
-          console.error("Failed to generate portrait for character:", characters[i]?.name, err);
-          characters[i].imageUrl = "";
-          characters[i].visualDescription = "";
-        }
-      }
-
-      return NextResponse.json({ characters });
+      console.log("API returning characters:", result.characters);
+      return NextResponse.json(result);
     }
 
     if (step === "generate-portrait") {
@@ -68,12 +34,31 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const { imageUrl, visualDescription } = await generatePortrait(character);
+      const visualDescription = buildVisualDescription(character);
+      const imagePrompt = `Full-body character concept art. ${visualDescription}. Cinematic style, high detail, vibrant colors. Ensure full head and body are in frame, no cropping.`;
 
-      return NextResponse.json({
-        imageUrl,
-        visualDescription,
-      });
+      try {
+        const dalleImage = await openai.images.generate({
+          model: "dall-e-3",
+          prompt: imagePrompt,
+          n: 1,
+          size: "1024x1792",
+        });
+
+        const imageUrl = dalleImage.data?.[0]?.url || "";
+        console.log("Generated portrait URL:", imageUrl);
+
+        return NextResponse.json({
+          imageUrl,
+          visualDescription,
+        });
+      } catch (err) {
+        console.error("DALL-E error:", err);
+        return NextResponse.json(
+          { error: "Failed to generate portrait." },
+          { status: 500 }
+        );
+      }
     }
 
     return NextResponse.json(
@@ -84,9 +69,7 @@ export async function POST(request: NextRequest) {
     console.error("[API] Character generation error:", error);
     return NextResponse.json(
       {
-        error:
-          error?.message ||
-          "Failed to generate character data. Please try again.",
+        error: error?.message || "Failed to generate character data. Please try again.",
       },
       { status: 500 }
     );
@@ -94,15 +77,7 @@ export async function POST(request: NextRequest) {
 }
 
 function buildVisualDescription(character: any): string {
-  const {
-    name,
-    description,
-    role,
-    mood,
-    skinColor,
-    hairColor,
-    clothingColor,
-  } = character;
+  const { name, description, role, mood, skinColor, hairColor, clothingColor } = character;
 
   return [
     `Character name: ${name}`,

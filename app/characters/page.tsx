@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
-import { Users, Plus, User } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Users, Plus, User, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { useFilmStore } from "@/lib/store";
 
 interface Character {
@@ -24,6 +26,7 @@ export default function CharactersPage() {
   const { filmPackage, updateFilmPackage } = useFilmStore();
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const [newCharacter, setNewCharacter] = useState<Character>({
     name: "",
@@ -37,6 +40,11 @@ export default function CharactersPage() {
   });
 
   const characters = filmPackage?.characters || [];
+
+  // Debug: Log characters on change
+  useEffect(() => {
+    console.log("Current characters:", characters);
+  }, [characters]);
 
   const handleAddCharacter = () => {
     if (!newCharacter.name.trim() || !newCharacter.description.trim()) {
@@ -66,6 +74,7 @@ export default function CharactersPage() {
     }
 
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch("/api/characters", {
         method: "POST",
@@ -82,46 +91,17 @@ export default function CharactersPage() {
       if (!res.ok) {
         const errorData = await res.json();
         console.error("API error:", errorData.error);
-        alert(errorData.error || "Failed to generate characters.");
+        setError(errorData.error || "Failed to generate characters.");
         return;
       }
 
       const data = await res.json();
-      let updatedCharacters = data.characters || [];
-
-      // Automatically generate portraits for each character
-      for (let index = 0; index < updatedCharacters.length; index++) {
-        const character = updatedCharacters[index];
-        if (!character.name || !character.description) continue;
-
-        const portraitRes = await fetch("/api/characters", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            step: "generate-portrait",
-            character,
-          }),
-        });
-
-        if (portraitRes.ok) {
-          const portraitData = await portraitRes.json();
-          updatedCharacters[index] = {
-            ...character,
-            imageUrl: portraitData.imageUrl,
-            visualDescription: portraitData.visualDescription,
-          };
-        } else {
-          console.error("Failed to generate portrait for character:", character.name);
-        }
-      }
-
-      updateFilmPackage({ characters: updatedCharacters });
-      alert("Characters and portraits generated successfully!");
+      console.log("Received characters from API:", data.characters);
+      updateFilmPackage({ characters: data.characters || [] });
+      alert("Characters generated successfully!");
     } catch (error) {
       console.error("Failed to generate characters:", error);
-      alert("Failed to generate characters. Please try again.");
+      setError("Failed to generate characters. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -134,6 +114,7 @@ export default function CharactersPage() {
     }
 
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch("/api/characters", {
         method: "POST",
@@ -149,11 +130,12 @@ export default function CharactersPage() {
       if (!res.ok) {
         const errorData = await res.json();
         console.error("API error:", errorData.error);
-        alert(errorData.error || "Error generating portrait.");
+        setError(errorData.error || "Error generating portrait.");
         return;
       }
 
       const data = await res.json();
+      console.log("Portrait generated for", character.name, ":", data.imageUrl);
 
       const updatedCharacters = [...characters];
       updatedCharacters[index] = {
@@ -165,7 +147,7 @@ export default function CharactersPage() {
       updateFilmPackage({ characters: updatedCharacters });
     } catch (error) {
       console.error("Failed to generate portrait:", error);
-      alert("Error generating portrait. Please try again.");
+      setError("Error generating portrait. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -175,7 +157,7 @@ export default function CharactersPage() {
     <Card className="glass-effect border-[#FF6A00]/20 p-8 text-left space-y-4 mt-6">
       <h3 className="text-xl font-semibold text-white mb-4">Add Character</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <input
+        <Input
           className="p-2 rounded bg-[#032f30] text-white"
           placeholder="Name"
           value={newCharacter.name}
@@ -183,7 +165,7 @@ export default function CharactersPage() {
             setNewCharacter({ ...newCharacter, name: e.target.value })
           }
         />
-        <input
+        <Input
           className="p-2 rounded bg-[#032f30] text-white"
           placeholder="Role"
           value={newCharacter.role}
@@ -191,7 +173,7 @@ export default function CharactersPage() {
             setNewCharacter({ ...newCharacter, role: e.target.value })
           }
         />
-        <textarea
+        <Textarea
           className="p-2 rounded bg-[#032f30] text-white col-span-2"
           placeholder="Description"
           value={newCharacter.description}
@@ -202,7 +184,7 @@ export default function CharactersPage() {
             })
           }
         />
-        <input
+        <Input
           className="p-2 rounded bg-[#032f30] text-white col-span-2"
           placeholder="Traits (comma separated)"
           value={newCharacter.traits?.join(", ") || ""}
@@ -215,7 +197,7 @@ export default function CharactersPage() {
         />
         <div className="flex flex-col">
           <label className="text-sm text-[#B2C8C9]">Skin Color</label>
-          <input
+          <Input
             type="color"
             value={newCharacter.skinColor}
             onChange={(e) =>
@@ -228,7 +210,7 @@ export default function CharactersPage() {
         </div>
         <div className="flex flex-col">
           <label className="text-sm text-[#B2C8C9]">Hair Color</label>
-          <input
+          <Input
             type="color"
             value={newCharacter.hairColor}
             onChange={(e) =>
@@ -241,7 +223,7 @@ export default function CharactersPage() {
         </div>
         <div className="flex flex-col">
           <label className="text-sm text-[#B2C8C9]">Clothing Color</label>
-          <input
+          <Input
             type="color"
             value={newCharacter.clothingColor}
             onChange={(e) =>
@@ -252,7 +234,7 @@ export default function CharactersPage() {
             }
           />
         </div>
-        <input
+        <Input
           className="p-2 rounded bg-[#032f30] text-white"
           placeholder="Mood (e.g. serious, playful)"
           value={newCharacter.mood}
@@ -287,13 +269,25 @@ export default function CharactersPage() {
                 Create and manage your film's characters
               </p>
             </div>
+            {error && (
+              <div className="text-red-400 text-center p-3 bg-red-400/10 rounded-lg mb-4">
+                {error}
+              </div>
+            )}
             <div className="flex justify-center mb-8">
               <Button
                 onClick={handleGenerateCharacters}
                 disabled={loading}
                 className="bg-[#FF6A00] hover:bg-[#E55A00] text-white"
               >
-                {loading ? "Generating..." : "Generate Characters"}
+                {loading ? (
+                  <>
+                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  "Generate Characters"
+                )}
               </Button>
             </div>
             {renderCharacterForm()}
@@ -322,7 +316,14 @@ export default function CharactersPage() {
                 disabled={loading}
                 className="bg-[#FF6A00] hover:bg-[#E55A00] text-white mt-4 md:mt-0"
               >
-                {loading ? "Generating..." : "Generate Characters"}
+                {loading ? (
+                  <>
+                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  "Generate Characters"
+                )}
               </Button>
               <Button
                 onClick={() => setShowForm(!showForm)}
@@ -335,6 +336,11 @@ export default function CharactersPage() {
           </div>
 
           {showForm && renderCharacterForm()}
+          {error && (
+            <div className="text-red-400 text-center p-3 bg-red-400/10 rounded-lg mb-4">
+              {error}
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">
             {characters.map((character, index) => (
@@ -358,12 +364,16 @@ export default function CharactersPage() {
                   </div>
                 </div>
 
-                {character.imageUrl && (
+                {character.imageUrl ? (
                   <img
                     src={character.imageUrl}
                     alt={character.name}
                     className="w-full h-auto rounded border border-[#FF6A00]/30"
                   />
+                ) : (
+                  <div className="w-full h-64 bg-[#032f30] rounded border border-[#FF6A00]/30 flex items-center justify-center text-[#B2C8C9]">
+                    No Image Available
+                  </div>
                 )}
 
                 <p className="text-[#B2C8C9] text-sm leading-relaxed">
@@ -388,17 +398,17 @@ export default function CharactersPage() {
                   <span className="text-xs text-[#8da3a4]">Skin:</span>
                   <span
                     className="inline-block w-4 h-4 rounded"
-                    style={{ backgroundColor: character.skinColor }}
+                    style={{ backgroundColor: character.skinColor || "#8C5D3C" }}
                   />
                   <span className="text-xs text-[#8da3a4]">Hair:</span>
                   <span
                     className="inline-block w-4 h-4 rounded"
-                    style={{ backgroundColor: character.hairColor }}
+                    style={{ backgroundColor: character.hairColor || "#1C1C1C" }}
                   />
                   <span className="text-xs text-[#8da3a4]">Clothes:</span>
                   <span
                     className="inline-block w-4 h-4 rounded"
-                    style={{ backgroundColor: character.clothingColor }}
+                    style={{ backgroundColor: character.clothingColor || "#A33C2F" }}
                   />
                 </div>
 
@@ -414,7 +424,16 @@ export default function CharactersPage() {
                   disabled={loading}
                   className="mt-3 bg-[#FF6A00] hover:bg-[#E55A00] text-white w-full"
                 >
-                  {loading ? "Generating..." : character.imageUrl ? "Regenerate Portrait" : "Generate Portrait"}
+                  {loading ? (
+                    <>
+                      <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                      Generating...
+                    </>
+                  ) : character.imageUrl ? (
+                    "Regenerate Portrait"
+                  ) : (
+                    "Generate Portrait"
+                  )}
                 </Button>
               </Card>
             ))}
