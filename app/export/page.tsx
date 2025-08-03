@@ -34,8 +34,8 @@ const exportOptions: ExportOption[] = [
   {
     id: "storyboard",
     name: "Storyboard Package",
-    description: "Visual storyboard with shot lists and notes",
-    format: "PDF",
+    description: "Visual storyboard with shot lists, notes, and images",
+    format: "ZIP",
     size: "15-30 MB",
   },
   {
@@ -55,8 +55,8 @@ const exportOptions: ExportOption[] = [
   {
     id: "characters",
     name: "Character Profiles",
-    description: "Character descriptions and development notes",
-    format: "PDF",
+    description: "Character descriptions, development notes, and images",
+    format: "ZIP",
     size: "5-10 MB",
   },
   {
@@ -69,7 +69,7 @@ const exportOptions: ExportOption[] = [
   {
     id: "complete",
     name: "Complete Package",
-    description: "Everything in one comprehensive export",
+    description: "Everything in one comprehensive export with all images",
     format: "ZIP",
     size: "100-200 MB",
   },
@@ -78,6 +78,7 @@ const exportOptions: ExportOption[] = [
 export default function ExportPage() {
   const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
   const [isExporting, setIsExporting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const { filmPackage } = useFilmStore();
 
   const handleOptionToggle = (optionId: string) => {
@@ -94,7 +95,13 @@ export default function ExportPage() {
       return;
     }
 
+    if (!filmPackage) {
+      alert("No film package data available. Please generate content first.");
+      return;
+    }
+
     setIsExporting(true);
+    setError(null);
     try {
       const res = await fetch("/api/export", {
         method: "POST",
@@ -103,32 +110,29 @@ export default function ExportPage() {
         },
         body: JSON.stringify({
           selectedOptions,
-          filmPackage, // Send the full filmPackage data to the API
+          filmPackage,
         }),
       });
 
       if (!res.ok) {
-        throw new Error("Failed to generate export");
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to generate export");
       }
 
-      const data = await res.json();
-      const exportPackage = data.exportPackage;
-
-      // Create a blob and download the file
-      const blob = new Blob([exportPackage], { type: "text/plain" });
+      const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = "vizir-film-export.txt"; // Can be changed to .zip or .pdf if server generates those
+      a.download = "vizir_film_export.zip";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
       alert("Export completed successfully!");
-    } catch (error) {
+    } catch (error: any) {
       console.error("Export failed:", error);
-      alert("Export failed. Please try again.");
+      setError("Export failed. Please try again.");
     } finally {
       setIsExporting(false);
     }
@@ -136,7 +140,13 @@ export default function ExportPage() {
 
   // Estimate total size
   const estimatedSizeMB = selectedOptions.length
-    ? selectedOptions.length * 25
+    ? selectedOptions.reduce((total, optionId) => {
+        const option = exportOptions.find((opt) => opt.id === optionId);
+        if (!option) return total;
+        const sizeMatch = option.size.match(/(\d+)-?(\d+)?/);
+        const size = sizeMatch ? (parseInt(sizeMatch[2] || sizeMatch[1]) + parseInt(sizeMatch[1])) / 2 : 25;
+        return total + size;
+      }, 0)
     : 0;
 
   // Estimate time
@@ -159,6 +169,12 @@ export default function ExportPage() {
               backup, or handoff to other teams.
             </p>
           </div>
+
+          {error && (
+            <div className="text-red-400 text-center p-3 bg-red-400/10 rounded-lg mb-4">
+              {error}
+            </div>
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             {/* Export Options */}
@@ -186,9 +202,7 @@ export default function ExportPage() {
                           <input
                             type="checkbox"
                             checked={isSelected}
-                            onChange={() =>
-                              handleOptionToggle(option.id)
-                            }
+                            onChange={() => handleOptionToggle(option.id)}
                             className="mt-1 text-[#FF6A00] focus:ring-[#FF6A00]"
                           />
 
@@ -241,7 +255,7 @@ export default function ExportPage() {
                   <div className="flex justify-between">
                     <span className="text-[#8da3a4]">Estimated Size:</span>
                     <span className="text-white font-medium">
-                      {estimatedSizeMB} MB
+                      {estimatedSizeMB.toFixed(1)} MB
                     </span>
                   </div>
                   <div className="flex justify-between">
@@ -254,9 +268,7 @@ export default function ExportPage() {
 
                 <Button
                   onClick={handleExport}
-                  disabled={
-                    selectedOptions.length === 0 || isExporting
-                  }
+                  disabled={selectedOptions.length === 0 || isExporting}
                   className="w-full mt-6 bg-[#FF6A00] hover:bg-[#E55A00] text-white disabled:opacity-50"
                 >
                   {isExporting ? (
@@ -283,7 +295,10 @@ export default function ExportPage() {
                   <Button
                     variant="outline"
                     className="w-full justify-start border-[#FF6A00]/20 text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white"
-                    onClick={() => setSelectedOptions(["script"])} // Quick select script
+                    onClick={() => {
+                      setSelectedOptions(["script"]);
+                      handleExport();
+                    }}
                   >
                     <FileText className="w-4 h-4 mr-2" />
                     Script PDF
@@ -291,7 +306,10 @@ export default function ExportPage() {
                   <Button
                     variant="outline"
                     className="w-full justify-start border-[#FF6A00]/20 text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white"
-                    onClick={() => setSelectedOptions(["storyboard"])} // Quick select storyboard
+                    onClick={() => {
+                      setSelectedOptions(["storyboard"]);
+                      handleExport();
+                    }}
                   >
                     <Film className="w-4 h-4 mr-2" />
                     Storyboard
@@ -299,7 +317,10 @@ export default function ExportPage() {
                   <Button
                     variant="outline"
                     className="w-full justify-start border-[#FF6A00]/20 text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white"
-                    onClick={() => setSelectedOptions(["complete"])} // Quick select complete
+                    onClick={() => {
+                      setSelectedOptions(["complete"]);
+                      handleExport();
+                    }}
                   >
                     <Package className="w-4 h-4 mr-2" />
                     Complete Package
@@ -317,13 +338,13 @@ export default function ExportPage() {
                   <Button
                     variant="outline"
                     className="w-full justify-start border-[#FF6A00]/20 text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white"
+                    disabled
                   >
                     <Share className="w-4 h-4 mr-2" />
                     Generate Share Link
                   </Button>
                   <p className="text-[#8da3a4] text-xs">
-                    Create a shareable link for collaborators to view
-                    your project.
+                    Create a shareable link for collaborators to view your project (coming soon).
                   </p>
                 </div>
               </Card>
