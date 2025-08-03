@@ -80,7 +80,13 @@ Always fill imagePrompt with a short visual description. Leave imageUrl empty—
       "name": "...",
       "role": "...",
       "description": "...",
-      "traits": ["...", "..."]
+      "traits": ["...", "..."],
+      "skinColor": "...",
+      "hairColor": "...",
+      "clothingColor": "...",
+      "mood": "...",
+      "visualDescription": "...",
+      "imageUrl": ""
     }
   ]
 }
@@ -110,13 +116,14 @@ Always fill imagePrompt with a short visual description. Leave imageUrl empty—
       "type": "...",
       "duration": "...",
       "description": "...",
-      "scenes": ["...", "..."]
+      "scenes": ["...", "..."],
+      "audioUrl": ""
     }
   ]
 }
 
-Always produce valid JSON without any extra commentary.
-      `,
+Always produce valid JSON without any extra commentary or markdown (e.g., no \`\`\`json).
+`,
       },
       {
         role: "user",
@@ -127,175 +134,19 @@ Always produce valid JSON without any extra commentary.
     response_format: { type: "json_object" },
   });
 
-  return completion.choices[0].message.content ?? "";
+  let content = completion.choices[0].message.content ?? "";
+  content = content.trim();
+  if (content.startsWith("```json")) {
+    content = content.slice(7);
+  }
+  if (content.endsWith("```")) {
+    content = content.slice(0, -3);
+  }
+  content = content.trim();
+  return content;
 }
 
-// ---------- GENERATORS ----------
-
-export const generateScript = async (
-  idea: string,
-  genre: string,
-  length: string
-) => {
-  const prompt = `
-Generate the following for a film project:
-
-- Logline (1-2 sentences)
-- Synopsis (max 150 words)
-- A professional film script of about ${length} in proper screenplay format (2-5 pages). Include:
-    • Scene headings (sluglines)
-    • Action lines in present tense
-    • Character names uppercase and centered
-    • Dialogue indented under character names
-    • No camera directions or lens specifications in this version
-
-THEN also generate a JSON array named "shortScript" suitable for storyboarding. Each item should contain:
-- scene
-- shotNumber
-- description
-- cameraAngle
-- cameraMovement
-- lens
-- lighting
-- duration
-- dialogue
-- soundEffects
-- notes
-- imagePrompt
-- imageUrl (leave empty)
-- coverageShots (array of same fields)
-
-Return the entire result as a single JSON object with keys:
-- logline
-- synopsis
-- scriptText
-- shortScript
-
-Idea: ${idea}
-Genre: ${genre}
-`;
-
-  const result = await callOpenAI(prompt);
-
-  let data;
-  try {
-    data = JSON.parse(result);
-  } catch (e) {
-    console.error("Failed to parse script JSON:", e, result);
-    data = {
-      logline: "",
-      synopsis: "",
-      scriptText: "",
-      shortScript: [],
-    };
-  }
-
-  return {
-    logline: data.logline,
-    synopsis: data.synopsis,
-    script: data.scriptText,
-    scriptText: data.scriptText,
-    shortScript: data.shortScript,
-    themes: ["Determination", "Growth", "Conflict Resolution", "Human Nature"],
-  };
-};
-
-export const generateCharacters = async (
-  script: string,
-  genre: string
-) => {
-  const prompt = `
-Given the following film script or story content:
-${script}
-
-Generate a list of 3-5 main characters.
-For each character, provide:
-- Name
-- Role (Protagonist, Antagonist, Supporting, etc.)
-- 1-sentence description
-- Key traits (3-5 words)
-
-Format as JSON object with key "characters" containing the array.
-`;
-
-  const result = await callOpenAI(prompt);
-
-  let characters: Character[] = [];
-  try {
-    const parsed = JSON.parse(result);
-    characters = parsed.characters
-      .filter(
-        (char: any) =>
-          typeof char?.name === "string" &&
-          typeof char?.description === "string" &&
-          typeof char?.role === "string"
-      )
-      .map((char: any) => ({
-        name: char.name,
-        role: char.role,
-        description: char.description,
-        traits: Array.isArray(char.traits) ? char.traits : [],
-      }));
-  } catch (e) {
-    console.error("Failed to parse character JSON:", e, result);
-    characters = [];
-  }
-
-  console.log("Generated characters:", characters);
-
-  return { characters };
-};
-
-export const generateConcept = async (
-  script: string,
-  genre: string
-) => {
-  const prompt = `
-Given the following film script or synopsis:
-
-${script}
-
-Generate a cinematic concept document for a ${genre} film including:
-- Visual style and color palette
-- Camera techniques
-- Lighting approach
-- Thematic symbolism
-- Production values
-
-Also generate 3-5 visual references. For each reference, include:
-- short description (max 20 words)
-- a realistic or placeholder image URL
-
-Return JSON.
-`;
-
-  const raw = await callOpenAI(prompt);
-
-  let jsonData: any = {};
-  try {
-    jsonData = JSON.parse(raw);
-  } catch (e) {
-    console.error("Failed to parse concept JSON:", e, raw);
-    jsonData = {
-      concept: {},
-      visualReferences: [],
-    };
-  }
-
-  return {
-    concept: {
-      visualStyle: jsonData.concept?.visualStyle || "",
-      colorPalette: jsonData.concept?.colorPalette || "",
-      cameraTechniques: jsonData.concept?.cameraTechniques || "",
-      lightingApproach: jsonData.concept?.lightingApproach || "",
-      thematicSymbolism: jsonData.concept?.thematicSymbolism || "",
-      productionValues: jsonData.concept?.productionValues || "",
-    },
-    visualReferences: jsonData.visualReferences || [],
-  };
-};
-
-// ---------- Storyboard Types ----------
+// ---------- Types ----------
 
 export interface Character {
   name: string;
@@ -327,7 +178,212 @@ export interface StoryboardFrame {
   coverageShots?: StoryboardFrame[];
 }
 
-// ---------- Storyboard Generator ----------
+// ---------- GENERATORS ----------
+
+export const generateScript = async (
+  idea: string,
+  genre: string,
+  length: string
+) => {
+  const prompt = `
+Generate a film project with the following:
+
+- Logline (1-2 sentences, concise and compelling)
+- Synopsis (max 150 words, summarizing the story)
+- A professional film script of approximately ${length} in proper screenplay format (2-5 pages). Include:
+  • Scene headings (e.g., INT. FOREST - DAY)
+  • Action lines in present tense
+  • Character names uppercase and centered
+  • Dialogue indented under character names
+  • No camera directions or lens specifications
+- A JSON array named "shortScript" for storyboarding, with each item containing:
+  • scene (short title)
+  • shotNumber (e.g., "1A")
+  • description (2-3 sentences)
+  • cameraAngle (e.g., "Close-Up")
+  • cameraMovement (e.g., "Static")
+  • lens (e.g., "35mm")
+  • lighting (e.g., "Soft natural light")
+  • duration (e.g., "5 seconds")
+  • dialogue (spoken lines, if any)
+  • soundEffects (e.g., "Birds chirping")
+  • notes (directorial notes)
+  • imagePrompt (1-sentence visual description for DALL-E)
+  • imageUrl (empty string)
+  • coverageShots (array of same fields, 4 per scene)
+
+Return a JSON object with keys:
+- logline
+- synopsis
+- scriptText
+- shortScript
+
+Idea: ${idea}
+Genre: ${genre}
+`;
+
+  const result = await callOpenAI(prompt);
+
+  let data;
+  try {
+    data = JSON.parse(result);
+  } catch (e) {
+    console.error("Failed to parse script JSON:", e, result);
+    data = {
+      logline: "",
+      synopsis: "",
+      scriptText: "",
+      shortScript: [],
+    };
+  }
+
+  console.log("Generated script:", data.scriptText);
+
+  return {
+    logline: data.logline || "",
+    synopsis: data.synopsis || "",
+    script: data.scriptText || "",
+    scriptText: data.scriptText || "",
+    shortScript: data.shortScript || [],
+    themes: ["Determination", "Growth", "Conflict Resolution", "Human Nature"],
+  };
+};
+
+export const generateCharacters = async (script: string, genre: string) => {
+  const prompt = `
+Given the following film script or story content:
+${script}
+
+Generate a list of 3-5 main characters, each with:
+- name (string)
+- role (Protagonist, Antagonist, Supporting, etc.)
+- description (1-sentence description)
+- traits (array of 3-5 strings)
+- skinColor (hex code, e.g., "#8C5D3C")
+- hairColor (hex code, e.g., "#1C1C1C")
+- clothingColor (hex code, e.g., "#A33C2F")
+- mood (string, e.g., "serious" or "playful")
+
+Return a JSON object with key "characters" containing the array of character objects.
+`;
+
+  const result = await callOpenAI(prompt);
+
+  let characters: Character[] = [];
+  try {
+    const parsed = JSON.parse(result);
+    if (Array.isArray(parsed.characters)) {
+      characters = parsed.characters
+        .filter(
+          (char: any) =>
+            typeof char?.name === "string" &&
+            typeof char?.description === "string" &&
+            typeof char?.role === "string" &&
+            Array.isArray(char?.traits) &&
+            typeof char?.skinColor === "string" &&
+            typeof char?.hairColor === "string" &&
+            typeof char?.clothingColor === "string" &&
+            typeof char?.mood === "string"
+        )
+        .map((char: any) => ({
+          name: char.name,
+          role: char.role,
+          description: char.description,
+          traits: char.traits,
+          skinColor: char.skinColor,
+          hairColor: char.hairColor,
+          clothingColor: char.clothingColor,
+          mood: char.mood,
+        }));
+    }
+  } catch (e) {
+    console.error("Failed to parse character JSON:", e, result);
+    characters = [];
+  }
+
+  // Generate images for each character
+  for (let i = 0; i < characters.length; i++) {
+    const char = characters[i];
+    const visualDescription = [
+      `Character name: ${char.name}`,
+      `Description: ${char.description}`,
+      char.role ? `Role: ${char.role}` : "",
+      char.mood ? `Mood: ${char.mood}` : "",
+      char.skinColor ? `Skin color: ${char.skinColor}` : "",
+      char.hairColor ? `Hair color: ${char.hairColor}` : "",
+      char.clothingColor ? `Clothing color: ${char.clothingColor}` : "",
+    ]
+      .filter(Boolean)
+      .join(". ");
+    const imagePrompt = `Photorealistic full-body portrait of a real person portraying the character. ${visualDescription}. Cinematic style, high detail, natural colors, realistic textures and lighting. Ensure full head and body are in frame, no cropping. The image should look like a professional actor in costume, ready for film production.`;
+
+    try {
+      const dalleImage = await openai.images.generate({
+        model: "dall-e-3",
+        prompt: imagePrompt,
+        n: 1,
+        size: "1024x1792",
+      });
+
+      characters[i].imageUrl = dalleImage.data?.[0]?.url || "";
+      characters[i].visualDescription = visualDescription;
+      console.log(`Generated image for ${char.name}:`, characters[i].imageUrl);
+    } catch (err) {
+      console.error("Failed to generate image for character:", char.name, err);
+      characters[i].imageUrl = "";
+      characters[i].visualDescription = visualDescription;
+    }
+  }
+
+  console.log("Generated characters:", characters);
+
+  return { characters };
+};
+
+export const generateConcept = async (script: string, genre: string) => {
+  const prompt = `
+Given the following film script or synopsis:
+${script}
+
+Generate a cinematic concept document for a ${genre} film including:
+- Visual style and color palette
+- Camera techniques
+- Lighting approach
+- Thematic symbolism
+- Production values
+
+Also generate 3-5 visual references. For each reference, include:
+- short description (max 20 words)
+- a realistic or placeholder image URL
+
+Return a JSON object with keys: concept, visualReferences.
+`;
+
+  const result = await callOpenAI(prompt);
+
+  let jsonData: any = {};
+  try {
+    jsonData = JSON.parse(result);
+  } catch (e) {
+    console.error("Failed to parse concept JSON:", e, result);
+    jsonData = {
+      concept: {},
+      visualReferences: [],
+    };
+  }
+
+  return {
+    concept: {
+      visualStyle: jsonData.concept?.visualStyle || "",
+      colorPalette: jsonData.concept?.colorPalette || "",
+      cameraTechniques: jsonData.concept?.cameraTechniques || "",
+      lightingApproach: jsonData.concept?.lightingApproach || "",
+      thematicSymbolism: jsonData.concept?.thematicSymbolism || "",
+      productionValues: jsonData.concept?.productionValues || "",
+    },
+    visualReferences: jsonData.visualReferences || [],
+  };
+};
 
 export const generateStoryboard = async ({
   movieIdea,
@@ -349,7 +405,7 @@ export const generateStoryboard = async ({
       (c) =>
         `Character: ${c.name}. Description: ${
           c.visualDescription || c.description || ""
-        }.`
+        }. Skin: ${c.skinColor || "default"}. Hair: ${c.hairColor || "default"}. Clothing: ${c.clothingColor || "default"}. Mood: ${c.mood || "neutral"}.`
     )
     .join("\n");
 
@@ -361,7 +417,7 @@ Genre: ${movieGenre}
 Script:
 ${script}
 
-Characters for visual consistency (include their appearances in all relevant image prompts):
+Characters for visual consistency:
 ${characterBlock}
 
 Break the script into exactly ${numImages} key scenes chronologically, covering the main plot beats from beginning to end. For each scene, generate a main storyboard frame using professional conventions: varied shot compositions, dynamic angles, and ties to narrative tension.
@@ -389,7 +445,7 @@ coverageShots is an array of 4 objects, each with ALL the same fields as a main 
 
 All images are black-and-white pencil sketches in a professional comic-book storyboard style.
 
-Return ONLY the valid JSON object like { "storyboard": [ ... ] }, no other text.
+Return a JSON object with key "storyboard" containing the array.
 `;
 
   const result = await callOpenAI(prompt);
@@ -482,22 +538,15 @@ export const generateBudget = async (
   const prompt = `
 Generate a professional film budget breakdown for a ${length} ${genre} film.
 
-Return JSON in this exact format:
-{
-  "categories": [
-    {
-      "name": "Category Name",
-      "amount": number,
-      "percentage": number,
-      "items": ["item 1", "item 2"],
-      "tips": ["tip 1", "tip 2"],
-      "alternatives": ["alternative 1", "alternative 2"]
-    },
-    ...
-  ]
-}
+Return JSON with key "categories" containing an array of category objects, each with:
+- name
+- amount (in USD)
+- percentage (total ~100%)
+- items (array of strings)
+- tips (array of strings)
+- alternatives (array of strings)
 
-Estimate realistic costs for:
+Include categories:
 - Pre-production
 - Cast
 - Crew
@@ -509,34 +558,26 @@ Estimate realistic costs for:
 - Marketing
 - Miscellaneous
 
-Amounts should be in USD.
-Percentages should total ~100%.
-Keep it concise (max 10 categories).
-
-${lowBudgetMode ? 
-`If lowBudgetMode is true:
-- Reduce all amounts by approximately 50%.
-- Add cost-saving tips for each category.
-- Suggest low-cost alternatives for each category.` 
-: 
-`If lowBudgetMode is false:
-- Provide standard industry costs.
-- Tips and alternatives can be empty arrays if not applicable.`}
+${lowBudgetMode ?
+`For lowBudgetMode:
+- Reduce amounts by ~50%.
+- Provide cost-saving tips and low-cost alternatives for each category.` :
+`For standard budget:
+- Use industry-standard costs.
+- Tips and alternatives can be empty if not applicable.`}
 `;
 
   const result = await callOpenAI(prompt);
 
   let parsed;
-
   try {
-    parsed = JSON.parse(result || "{}");
+    parsed = JSON.parse(result);
   } catch (e) {
     console.error("Failed to parse budget JSON:", e, result);
     parsed = { categories: [] };
   }
 
   if (lowBudgetMode && parsed.categories) {
-    // As a failsafe, reduce amounts even if the AI forgot to
     parsed.categories = parsed.categories.map((cat: any) => ({
       ...cat,
       amount: Math.round(cat.amount * 0.5),
@@ -548,23 +589,20 @@ ${lowBudgetMode ?
 
 // ---------- Schedule ----------
 
-export const generateSchedule = async (
-  script: string,
-  length: string
-) => {
+export const generateSchedule = async (script: string, length: string) => {
   const prompt = `
 Given this film script:
 ${script}
 
 Generate a shooting schedule for a film of length ${length}.
-For each day, list:
+For each day, include:
 - day name
 - activities (array of strings)
 - duration
-- optional location
-- optional crew list
+- location (optional)
+- crew list (optional)
 
-Format as JSON object with key "schedule" containing the array.
+Return a JSON object with key "schedule" containing the array.
 `;
 
   const result = await callOpenAI(prompt);
@@ -581,12 +619,9 @@ Format as JSON object with key "schedule" containing the array.
   return { schedule };
 };
 
-// ---------- Locations ---------- 
+// ---------- Locations ----------
 
-export const generateLocations = async (
-  script: string,
-  genre: string
-) => {
+export const generateLocations = async (script: string, genre: string) => {
   const fallbackScript = `
 A ${genre || "generic"} film featuring a protagonist navigating several dramatic locations:
 - An abandoned warehouse full of shadows and secrets.
@@ -599,85 +634,83 @@ A ${genre || "generic"} film featuring a protagonist navigating several dramatic
   const prompt = `
 You are a professional film location scout.
 
-Your task is to analyze the following film script and extract ALL distinct filming locations based on the scene headings and descriptions.
+Analyze the following film script and extract ALL distinct filming locations based on scene headings and descriptions.
 
 SCRIPT:
-
 """START_SCRIPT"""
 ${usedScript}
 """END_SCRIPT"""
 
 RULES:
-- Use only the actual locations from the script. Look for scene headings like "EXT. PARK ENTRANCE - LATER".
-- Do NOT invent generic names like "Primary Location" or "Climax Location".
-- NEVER leave any field blank or write "N/A".
-- If script lacks details, create plausible cinematic descriptions — but still use the location names found in the script.
-- Every location must include:
-  - name (taken directly from scene heading)
+- Use only actual locations from the script (e.g., "EXT. PARK ENTRANCE - LATER").
+- Do NOT invent generic names like "Primary Location".
+- NEVER leave any field blank or use "N/A".
+- If script lacks details, create plausible cinematic descriptions using the script's location names.
+- Each location must include:
+  - name (from scene heading)
   - type (Interior or Exterior)
   - description (visual and atmospheric details)
-  - mood (emotional tone of the place)
+  - mood (emotional tone)
   - colorPalette (key visual tones/colors)
   - propsOrFeatures (array of objects or environmental features)
-  - scenes (short summary of what happens there)
-  - rating (1–5 how visually powerful this location is)
+  - scenes (short summary of events)
+  - rating (1–5 for visual impact)
   - lowBudgetTips (how to recreate affordably)
   - highBudgetOpportunities (how to elevate production design)
 
-RESPONSE FORMAT:
-Return ONLY a valid JSON object with key "locations" containing the array of location objects. No extra text or commentary.
+Return a JSON object with key "locations" containing the array of location objects.
 `;
 
   const result = await callOpenAI(prompt);
 
-  console.log("🟠 RAW GPT result for locations:", result);
-
   let locations: any[] = [];
-
   try {
     const parsed = JSON.parse(result);
     locations = parsed.locations || [];
   } catch (e) {
-    console.error("❌ Failed to parse locations JSON:", e, result);
+    console.error("Failed to parse locations JSON:", e, result);
     locations = [];
   }
 
   return { locations };
 };
 
-
 // ---------- Sound Assets ----------
 
-export const generateSoundAssets = async (
-  script: string,
-  genre: string
-) => {
+export const generateSoundAssets = async (script: string, genre: string) => {
   const prompt = `
 Given this film script:
-
 ${script}
 
-Generate 3-5 sound assets for a ${genre} film.
-For each asset, include:
-- name
+Generate 3-5 sound assets for a ${genre} film, each with:
+- name (unique and descriptive, reflecting the asset's purpose)
 - type (music, sfx, dialogue, ambient)
-- duration
-- description (provide a highly detailed, vivid description of the sound to enable accurate AI audio generation, including specific elements, tones, intensities, and how it fits the scene)
-- scenes where it appears
+- duration (minimum 10 seconds, formatted as "MM:SS", e.g., "00:10")
+- description (highly detailed, vivid description for AI audio generation, including specific elements, tones, intensities, and how it enhances the scene's mood or action; at least 50 words)
+- scenes (array of scene names or descriptions where the asset appears)
+- audioUrl (empty string)
 
-Format as JSON object with key "soundAssets" containing the array.
+Return a JSON object with key "soundAssets" containing the array of sound asset objects.
 `;
 
   const result = await callOpenAI(prompt);
 
-  let soundAssets = [];
+  let soundAssets: any[] = [];
   try {
     const parsed = JSON.parse(result);
     soundAssets = parsed.soundAssets || [];
+    // Ensure minimum duration of 10 seconds
+    soundAssets = soundAssets.map((asset) => ({
+      ...asset,
+      duration: asset.duration && parseInt(asset.duration.split(":")[1]) >= 10 ? asset.duration : "00:10",
+      audioUrl: "", // Ensure audioUrl is empty
+    }));
   } catch (e) {
     console.error("Failed to parse sound assets JSON:", e, result);
     soundAssets = [];
   }
+
+  console.log("Generated sound assets:", soundAssets);
 
   return { soundAssets };
 };

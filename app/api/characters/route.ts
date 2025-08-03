@@ -1,3 +1,4 @@
+// C:\Users\vizir\VizirPro\app\api\characters\route.ts
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { generateCharacters } from "@/lib/generators";
@@ -35,7 +36,7 @@ export async function POST(request: NextRequest) {
       }
 
       const visualDescription = buildVisualDescription(character);
-      const imagePrompt = `Full-body character concept art. ${visualDescription}. Cinematic style, high detail, vibrant colors. Ensure full head and body are in frame, no cropping.`;
+      const imagePrompt = `Photorealistic full-body portrait of a real person portraying the character. ${visualDescription}. Cinematic style, high detail, natural colors, realistic textures and lighting. Ensure full head and body are in frame, no cropping. The image should look like a professional actor in costume, ready for film production.`;
 
       try {
         const dalleImage = await openai.images.generate({
