@@ -1,3 +1,4 @@
+// app/sound/page.tsx
 "use client";
 
 import { useState, useRef } from "react";
@@ -6,6 +7,7 @@ import {
   Plus,
   Play,
   Pause,
+  Pause as PauseIcon,
   Loader2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -232,7 +234,7 @@ export default function SoundPage() {
                           : "text-[#8da3a4] hover:text-white hover:bg-[#14484a]"
                       }`}
                     >
-                      {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
+                      {isPlaying ? <PauseIcon className="w-5 h-5" /> : <Play className="w-5 h-5" />}
                     </Button>
                   </div>
                 </Card>
