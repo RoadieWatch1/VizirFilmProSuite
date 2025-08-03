@@ -1,3 +1,4 @@
+// C:\Users\vizir\VizirPro\app\export\page.tsx
 "use client";
 
 import { useState } from "react";
@@ -7,10 +8,12 @@ import {
   Film,
   Package,
   Share,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { useFilmStore } from "@/lib/store";
 
 interface ExportOption {
   id: string;
@@ -75,6 +78,7 @@ const exportOptions: ExportOption[] = [
 export default function ExportPage() {
   const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
   const [isExporting, setIsExporting] = useState(false);
+  const { filmPackage } = useFilmStore();
 
   const handleOptionToggle = (optionId: string) => {
     setSelectedOptions((prev) =>
@@ -92,8 +96,35 @@ export default function ExportPage() {
 
     setIsExporting(true);
     try {
-      // Simulate an export request
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          selectedOptions,
+          filmPackage, // Send the full filmPackage data to the API
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to generate export");
+      }
+
+      const data = await res.json();
+      const exportPackage = data.exportPackage;
+
+      // Create a blob and download the file
+      const blob = new Blob([exportPackage], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "vizir-film-export.txt"; // Can be changed to .zip or .pdf if server generates those
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
       alert("Export completed successfully!");
     } catch (error) {
       console.error("Export failed:", error);
@@ -230,7 +261,7 @@ export default function ExportPage() {
                 >
                   {isExporting ? (
                     <>
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                       Exporting...
                     </>
                   ) : (
@@ -252,6 +283,7 @@ export default function ExportPage() {
                   <Button
                     variant="outline"
                     className="w-full justify-start border-[#FF6A00]/20 text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white"
+                    onClick={() => setSelectedOptions(["script"])} // Quick select script
                   >
                     <FileText className="w-4 h-4 mr-2" />
                     Script PDF
@@ -259,6 +291,7 @@ export default function ExportPage() {
                   <Button
                     variant="outline"
                     className="w-full justify-start border-[#FF6A00]/20 text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white"
+                    onClick={() => setSelectedOptions(["storyboard"])} // Quick select storyboard
                   >
                     <Film className="w-4 h-4 mr-2" />
                     Storyboard
@@ -266,6 +299,7 @@ export default function ExportPage() {
                   <Button
                     variant="outline"
                     className="w-full justify-start border-[#FF6A00]/20 text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white"
+                    onClick={() => setSelectedOptions(["complete"])} // Quick select complete
                   >
                     <Package className="w-4 h-4 mr-2" />
                     Complete Package
