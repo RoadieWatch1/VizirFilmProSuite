@@ -4,6 +4,7 @@ import './globals.css';
 import type { Metadata } from 'next';
 import { Inter, Roboto_Mono } from 'next/font/google';
 import Navigation from '@/components/Navigation';
+import { AuthProvider } from '@/lib/useAuth';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -33,10 +34,10 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${robotoMono.variable}`}>
       <body className="font-sans min-h-screen bg-[#021e1f] text-white">
-        <Navigation />
-        <main className="min-h-screen">
-          {children}
-        </main>
+        <AuthProvider>
+          <Navigation />
+          <main className="min-h-screen">{children}</main>
+        </AuthProvider>
       </body>
     </html>
   );

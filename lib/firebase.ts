@@ -1,7 +1,8 @@
-// lib/firebase.ts
-import { initializeApp, getApps, getApp } from "firebase/app";
-import { getStorage } from "firebase/storage";
-import { getFirestore } from "firebase/firestore";  // <-- import Firestore
+// C:\Users\vizir\VizirPro\lib\firebase.ts
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getAuth } from 'firebase/auth'; // Import Firebase Authentication
+import { getStorage } from 'firebase/storage';
+import { getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY!,
@@ -12,10 +13,11 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID!,
 };
 
+// Initialize Firebase app (reuse existing app if already initialized)
 const firebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-const storage = getStorage(firebaseApp);
-const db = getFirestore(firebaseApp); // <-- initialize Firestore
-
-export { firebaseApp, storage, db }; // <-- export Firestore too
-
+// Initialize Firebase services
+export const auth = getAuth(firebaseApp); // Export auth for use in useAuth.ts and LoginModal.tsx
+export const storage = getStorage(firebaseApp);
+export const db = getFirestore(firebaseApp);
+export { firebaseApp };

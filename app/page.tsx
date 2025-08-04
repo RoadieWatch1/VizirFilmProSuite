@@ -1,5 +1,7 @@
+
 "use client";
 
+import LoginModal from "@/components/LoginModal";
 import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
@@ -15,6 +17,12 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
 import { useFilmStore } from "@/lib/store";
+import { useAuth } from "@/lib/useAuth";
+import { db } from "@/lib/firebase";
+import { doc, getDoc } from "firebase/firestore";
+import { uploadAudioFile } from "@/lib/storageUtils";
+import { cn } from "@/lib/utils";
+import type { SoundAsset } from "@/lib/store";
 
 interface ScriptLengthOption {
   label: string;
@@ -33,47 +41,18 @@ const scriptLengthOptions: ScriptLengthOption[] = [
 ];
 
 const genreList: string[] = [
-  "Action",
-  "Adventure",
-  "Animation",
-  "Biography",
-  "Comedy",
-  "Crime",
-  "Documentary",
-  "Drama",
-  "Family",
-  "Fantasy",
-  "Film Noir",
-  "History",
-  "Horror",
-  "Musical",
-  "Mystery",
-  "Romance",
-  "Sci-Fi",
-  "Sport",
-  "Superhero",
-  "Thriller",
-  "War",
-  "Western",
-  "Psychological",
-  "Supernatural",
-  "Post-Apocalyptic",
-  "Cyberpunk",
-  "Steampunk",
-  "Coming-of-Age",
-  "Dark Comedy",
-  "Romantic Comedy",
-  "Mockumentary",
-  "Found Footage",
-  "Experimental",
-  "Indie",
-  "Art House",
+  "Action", "Adventure", "Animation", "Biography", "Comedy", "Crime", "Documentary", "Drama", "Family", "Fantasy",
+  "Film Noir", "History", "Horror", "Musical", "Mystery", "Romance", "Sci-Fi", "Sport", "Superhero", "Thriller",
+  "War", "Western", "Psychological", "Supernatural", "Post-Apocalyptic", "Cyberpunk", "Steampunk", "Coming-of-Age",
+  "Dark Comedy", "Romantic Comedy", "Mockumentary", "Found Footage", "Experimental", "Indie", "Art House",
 ];
 
 export default function HomePage() {
   const router = useRouter();
   const { updateFilmPackage } = useFilmStore();
+  const { user, loading: authLoading, logout } = useAuth();
 
+  const [showLoginModal, setShowLoginModal] = useState(false);
   const [movieIdea, setMovieIdea] = useState("");
   const [movieGenre, setMovieGenre] = useState("");
   const [scriptLength, setScriptLength] = useState("1 min (Short)");
@@ -82,85 +61,32 @@ export default function HomePage() {
   const [loadingMessage, setLoadingMessage] = useState("");
   const [showLengthDropdown, setShowLengthDropdown] = useState(false);
   const [showGenreDropdown, setShowGenreDropdown] = useState(false);
+  const [isSubscribed, setIsSubscribed] = useState(false);
+  const [subscriptionLoading, setSubscriptionLoading] = useState(true);
 
-  const isSubscribed = false;
-
-  const handleGenerate = async () => {
-    if (!movieIdea.trim() || !movieGenre.trim()) {
-      setError("Please provide both a movie idea and genre.");
-      return;
-    }
-
-    const selectedOption = scriptLengthOptions.find(
-      (opt) => opt.label === scriptLength
-    );
-
-    if (selectedOption?.isPro && !isSubscribed) {
-      router.push("/upgrade");
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    setLoadingMessage("Generating your film package...");
-
-    try {
-      console.log("🎬 Generating film package:", {
-        movieIdea,
-        movieGenre,
-        scriptLength,
-      });
-
-      const res = await fetch("/api/generate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          movieIdea,
-          movieGenre,
-          scriptLength,
-          provider: "openai",
-        }),
-      });
-
-      if (!res.ok) {
-        const errorResponse = await res.json();
-        throw new Error(errorResponse?.error || "API error");
+  // Check subscription status
+  useEffect(() => {
+    async function checkSubscription() {
+      if (user) {
+        try {
+          const userDoc = await getDoc(doc(db, "users", user.uid));
+          setIsSubscribed(userDoc.exists() && userDoc.data()?.isSubscribed === true);
+        } catch (err) {
+          console.error("Error checking subscription:", err);
+          setIsSubscribed(false);
+        }
+      } else {
+        setIsSubscribed(false);
       }
-
-      const data = await res.json();
-
-      updateFilmPackage({
-        idea: movieIdea,
-        genre: movieGenre,
-        length: scriptLength,
-        script: data.script || "",
-        logline: data.logline || "",
-        synopsis: data.synopsis || "",
-        themes: data.themes || [],
-        characters: data.characters || [],
-        storyboard: data.storyboard || [],
-        soundAssets: data.soundAssets || [],
-      });
-
-      alert(
-        "Film package generated successfully! Check other tabs for your content."
-      );
-    } catch (err: any) {
-      console.error(err);
-      const errorMessage =
-        err instanceof Error
-          ? err.message
-          : "Failed to generate film package.";
-      setError(errorMessage);
-    } finally {
-      setLoading(false);
-      setLoadingMessage("");
+      setSubscriptionLoading(false);
     }
-  };
 
-  // ✅ Close dropdowns on outside click
+    if (!authLoading) {
+      checkSubscription();
+    }
+  }, [user, authLoading]);
+
+  // Close dropdowns on outside click
   useEffect(() => {
     const handleClickOutside = () => {
       setShowLengthDropdown(false);
@@ -175,74 +101,194 @@ export default function HomePage() {
     };
   }, [showLengthDropdown, showGenreDropdown]);
 
+  const handleGenerate = async () => {
+    if (!movieIdea.trim() || !movieGenre.trim()) {
+      setError("Please provide both a movie idea and genre.");
+      return;
+    }
+
+    const selectedOption = scriptLengthOptions.find(
+      (opt) => opt.label === scriptLength
+    );
+
+    if (selectedOption?.isPro && !isSubscribed) {
+      if (!user) {
+        setShowLoginModal(true);
+        setError("Please log in to access Pro features.");
+        return;
+      }
+      router.push("/upgrade");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setLoadingMessage("Generating your film package...");
+
+    try {
+      const token = user ? await user.getIdToken() : null;
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          movieIdea,
+          movieGenre,
+          scriptLength,
+          provider: "openai",
+        }),
+      });
+
+      if (!res.ok) {
+        const errorResponse = await res.json();
+        throw new Error(errorResponse?.error || "Failed to generate film package.");
+      }
+
+      const data = await res.json();
+
+      // Upload audio assets to Firebase Storage and map to SoundAsset
+      const uploadedSoundAssets: SoundAsset[] = data.soundAssets?.length
+        ? await Promise.all(
+            data.soundAssets.map(async (asset: { buffer: ArrayBuffer; filename: string }) => {
+              try {
+                const audioUrl = await uploadAudioFile(asset.buffer, asset.filename);
+                return {
+                  name: asset.filename,
+                  type: "music" as const, // Default type; adjust based on API data if available
+                  duration: "0:00", // Placeholder; update if API provides duration
+                  description: `Uploaded audio: ${asset.filename}`, // Placeholder
+                  audioUrl,
+                };
+              } catch (uploadErr) {
+                console.error(`Failed to upload ${asset.filename}:`, uploadErr);
+                return null;
+              }
+            })
+          ).then((assets) => assets.filter((asset): asset is SoundAsset => asset !== null))
+        : [];
+
+      updateFilmPackage({
+        idea: movieIdea,
+        genre: movieGenre,
+        length: scriptLength,
+        script: data.script || "",
+        logline: data.logline || "",
+        synopsis: data.synopsis || "",
+        themes: data.themes || [],
+        characters: data.characters || [],
+        storyboard: data.storyboard || [],
+        soundAssets: uploadedSoundAssets,
+      });
+
+      alert("Film package generated successfully! Check other tabs for your content.");
+    } catch (err: any) {
+      console.error("Generation error:", err);
+      const errorMessage =
+        err instanceof Error ? err.message : "An unexpected error occurred.";
+      setError(errorMessage);
+    } finally {
+      setLoading(false);
+      setLoadingMessage("");
+    }
+  };
+
+  if (authLoading || subscriptionLoading) {
+    return (
+      <div className={cn("min-h-screen cinematic-gradient flex items-center justify-center")}>
+        <Loader2 className={cn("w-8 h-8 text-[#FF6A00] animate-spin")} />
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen cinematic-gradient relative overflow-hidden">
+    <div className={cn("min-h-screen cinematic-gradient relative overflow-hidden")}>
       {/* Background Film Icon */}
-      <div className="film-icon-bg">
-        <Film size={500} className="text-[#FF6A00]" />
+      <div className={cn("film-icon-bg")}>
+        <Film size={500} className={cn("text-[#FF6A00]")} />
       </div>
 
-      <div className="relative z-10 container mx-auto px-4 py-12">
-        <div className="max-w-4xl mx-auto">
+      <div className={cn("relative z-10 container mx-auto px-4 py-12")}>
+        <div className={cn("max-w-4xl mx-auto")}>
           {/* Header */}
-          <div className="text-center mb-12">
-            <div className="flex items-center justify-center space-x-3 mb-4">
-              <Film className="w-10 h-10 text-[#FF6A00]" />
-              <h1 className="text-4xl font-bold text-white">
+          <div className={cn("text-center mb-12")}>
+            <div className={cn("flex items-center justify-center space-x-3 mb-4")}>
+              <Film className={cn("w-10 h-10 text-[#FF6A00]")} />
+              <h1 className={cn("text-4xl font-bold text-white")}>
                 Vizir Film Pro Suite
               </h1>
             </div>
-            <p className="text-xl text-[#B2C8C9] max-w-2xl mx-auto">
+            <p className={cn("text-xl text-[#B2C8C9] max-w-2xl mx-auto")}>
               Transform your ideas into complete film packages with Vizir Film Generator
-              
             </p>
           </div>
 
+          {/* Auth Buttons */}
+          <div className={cn("flex justify-end mb-4 gap-2")}>
+            {user && (
+              <Button
+                onClick={() => logout()}
+                className={cn("bg-red-500 hover:bg-red-600 text-white px-4 py-2")}
+              >
+                Log Out
+              </Button>
+            )}
+            <Button
+              onClick={() => setShowLoginModal(true)}
+              className={cn("bg-[#FF6A00] hover:bg-[#E55A00] text-white px-4 py-2")}
+            >
+              {user ? "Profile" : "Log In"}
+            </Button>
+          </div>
+
+          <LoginModal isOpen={showLoginModal} onClose={() => setShowLoginModal(false)} />
+
           {/* Generation Form */}
-          <Card className="glass-effect border-[#FF6A00]/20 p-8 mb-8">
-            <div className="space-y-6 relative overflow-visible">
+          <Card className={cn("glass-effect border-[#FF6A00]/20 p-8 mb-8")}>
+            <div className={cn("space-y-6 relative overflow-visible")}>
               {/* Movie Idea Input */}
               <div>
-                <label className="block text-white font-medium mb-2">
+                <label className={cn("block text-white font-medium mb-2")}>
                   Describe Your Film Idea
                 </label>
                 <Textarea
                   placeholder="A detective investigates mysterious disappearances in a small town..."
                   value={movieIdea}
                   onChange={(e) => setMovieIdea(e.target.value)}
-                  className="bg-[#032f30] border-[#FF6A00]/20 text-white placeholder:text-[#B2C8C9] focus:border-[#FF6A00] min-h-[100px]"
+                  className={cn("bg-[#032f30] border-[#FF6A00]/20 text-white placeholder:text-[#B2C8C9] focus:border-[#FF6A00] min-h-[100px]")}
                 />
               </div>
 
               {/* Genre Selection */}
               <div>
-                <label className="block text-white font-medium mb-2">
+                <label className={cn("block text-white font-medium mb-2")}>
                   Genre
                 </label>
-                <div className="space-y-2">
+                <div className={cn("space-y-2")}>
                   <Input
                     placeholder="Enter genre (e.g. Sci-Fi, Thriller)"
                     value={movieGenre}
                     onChange={(e) => setMovieGenre(e.target.value)}
-                    className="bg-[#032f30] border-[#FF6A00]/20 text-white placeholder:text-[#B2C8C9] focus:border-[#FF6A00]"
+                    className={cn("bg-[#032f30] border-[#FF6A00]/20 text-white placeholder:text-[#B2C8C9] focus:border-[#FF6A00]")}
                   />
-                  <div className="relative">
+                  <div className={cn("relative")}>
                     <Button
                       variant="outline"
                       onClick={(e) => {
                         e.stopPropagation();
                         setShowGenreDropdown(!showGenreDropdown);
                       }}
-                      className="w-full justify-between border-[#FF6A00] text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white"
+                      className={cn("w-full justify-between border-[#FF6A00] text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white")}
                     >
                       Browse Genres
-                      <ChevronDown className="w-4 h-4" />
+                      <ChevronDown className={cn("w-4 h-4")} />
                     </Button>
 
                     {showGenreDropdown &&
                       typeof document !== "undefined" &&
                       createPortal(
-                        <div className="fixed left-1/2 top-[50%] w-[300px] -translate-x-1/2 z-[9999] bg-[#032f30] border border-[#FF6A00]/20 rounded-lg shadow-lg max-h-60 overflow-y-auto transition-all duration-300">
+                        <div className={cn("fixed left-1/2 top-[50%] w-[300px] -translate-x-1/2 z-[9999] bg-[#032f30] border border-[#FF6A00]/20 rounded-lg shadow-lg max-h-60 overflow-y-auto transition-all duration-300")}>
                           {genreList.map((genre) => (
                             <button
                               key={genre}
@@ -250,7 +296,7 @@ export default function HomePage() {
                                 setMovieGenre(genre);
                                 setShowGenreDropdown(false);
                               }}
-                              className="w-full text-left px-4 py-2 text-white hover:bg-[#FF6A00] hover:text-white transition-colors"
+                              className={cn("w-full text-left px-4 py-2 text-white hover:bg-[#FF6A00] hover:text-white transition-colors")}
                             >
                               {genre}
                             </button>
@@ -264,26 +310,26 @@ export default function HomePage() {
 
               {/* Script Length Selection */}
               <div>
-                <label className="block text-white font-medium mb-2">
+                <label className={cn("block text-white font-medium mb-2")}>
                   Script Length
                 </label>
-                <div className="relative">
+                <div className={cn("relative")}>
                   <Button
                     variant="outline"
                     onClick={(e) => {
                       e.stopPropagation();
                       setShowLengthDropdown(!showLengthDropdown);
                     }}
-                    className="w-full justify-between border-[#FF6A00] text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white"
+                    className={cn("w-full justify-between border-[#FF6A00] text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white")}
                   >
                     {scriptLength}
-                    <ChevronDown className="w-4 h-4" />
+                    <ChevronDown className={cn("w-4 h-4")} />
                   </Button>
 
                   {showLengthDropdown &&
                     typeof document !== "undefined" &&
                     createPortal(
-                      <div className="fixed left-1/2 top-[50%] w-[300px] -translate-x-1/2 z-[9999] bg-[#032f30] border border-[#FF6A00]/20 rounded-lg shadow-lg max-h-60 overflow-y-auto transition-all duration-300">
+                      <div className={cn("fixed left-1/2 top-[50%] w-[300px] -translate-x-1/2 z-[9999] bg-[#032f30] border border-[#FF6A00]/20 rounded-lg shadow-lg max-h-60 overflow-y-auto transition-all duration-300")}>
                         {scriptLengthOptions.map((option) => (
                           <button
                             key={option.label}
@@ -295,15 +341,14 @@ export default function HomePage() {
                                 setShowLengthDropdown(false);
                               }
                             }}
-                            className={`w-full text-left px-4 py-2 text-white hover:bg-[#FF6A00] hover:text-white transition-colors flex items-center justify-between ${
-                              option.isPro && !isSubscribed
-                                ? "opacity-50"
-                                : ""
-                            }`}
+                            className={cn(
+                              "w-full text-left px-4 py-2 text-white hover:bg-[#FF6A00] hover:text-white transition-colors flex items-center justify-between",
+                              option.isPro && !isSubscribed && "opacity-50"
+                            )}
                           >
                             <span>{option.label}</span>
                             {option.isPro && (
-                              <Crown className="w-4 h-4 text-yellow-400" />
+                              <Crown className={cn("w-4 h-4 text-yellow-400")} />
                             )}
                           </button>
                         ))}
@@ -317,29 +362,29 @@ export default function HomePage() {
               <Button
                 onClick={handleGenerate}
                 disabled={loading || !movieIdea.trim() || !movieGenre.trim()}
-                className="w-full bg-[#FF6A00] hover:bg-[#E55A00] text-white py-4 text-lg font-semibold disabled:opacity-50"
+                className={cn("w-full bg-[#FF6A00] hover:bg-[#E55A00] text-white py-4 text-lg font-semibold", loading && "opacity-50")}
               >
                 {loading ? (
                   <>
-                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                    <Loader2 className={cn("w-5 h-5 mr-2 animate-spin")} />
                     Generating...
                   </>
                 ) : (
                   <>
-                    <Sparkles className="w-5 h-5 mr-2" />
+                    <Sparkles className={cn("w-5 h-5 mr-2")} />
                     Generate Film Package
                   </>
                 )}
               </Button>
 
               {error && (
-                <div className="text-red-400 text-center p-3 bg-red-400/10 rounded-lg">
+                <div className={cn("text-red-400 text-center p-3 bg-red-400/10 rounded-lg")}>
                   {error}
                 </div>
               )}
 
               {loading && loadingMessage && (
-                <div className="text-[#B2C8C9] text-center">
+                <div className={cn("text-[#B2C8C9] text-center")}>
                   {loadingMessage}
                 </div>
               )}
@@ -347,18 +392,17 @@ export default function HomePage() {
           </Card>
 
           {/* Pro Features CTA */}
-          <Card className="glass-effect border-yellow-400/20 p-6">
-            <div className="text-center">
-              <Crown className="w-8 h-8 text-yellow-400 mx-auto mb-3" />
-              <h3 className="text-xl font-semibold text-white mb-2">
+          <Card className={cn("glass-effect border-yellow-400/20 p-6")}>
+            <div className={cn("text-center")}>
+              <Crown className={cn("w-8 h-8 text-yellow-400 mx-auto mb-3")} />
+              <h3 className={cn("text-xl font-semibold text-white mb-2")}>
                 Unlock Pro Features
               </h3>
-              <p className="text-[#B2C8C9] mb-4">
-                Get longer scripts, advanced storyboards, detailed budgets, and
-                more.
+              <p className={cn("text-[#B2C8C9] mb-4")}>
+                Get longer scripts, advanced storyboards, detailed budgets, and more.
               </p>
               <Button
-                className="bg-yellow-400 hover:bg-yellow-500 text-black font-semibold"
+                className={cn("bg-yellow-400 hover:bg-yellow-500 text-black font-semibold")}
                 onClick={() => router.push("/upgrade")}
               >
                 Upgrade to Pro
