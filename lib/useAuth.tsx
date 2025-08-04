@@ -1,4 +1,5 @@
 // C:\Users\vizir\VizirPro\lib\useAuth.ts
+"use client";
 import { useState, useEffect, createContext, useContext } from "react";
 import {
   getAuth,
