@@ -1,3 +1,4 @@
+
 // C:\Users\vizir\VizirPro\lib\generators.ts
 import OpenAI from "openai";
 
@@ -27,12 +28,13 @@ You are an expert film development AI.
   "shortScript": [ ... ]
 }
 
-- scriptText should be a professional screenplay in correct screenplay formatting:
+- scriptText must be a professional screenplay in correct screenplay format:
   • SCENE HEADINGS (e.g. INT. FOREST - DAY)
   • Action lines in present tense
   • Character names uppercase and centered
   • Dialogue indented under character names
-  • No camera directions or lenses in the first draft script
+  • No camera directions or lenses
+  • Strictly adhere to specified page, scene, and character counts
 
 **When generating storyboards**, produce JSON like:
 {
@@ -56,7 +58,7 @@ You are an expert film development AI.
   ]
 }
 
-Always fill imagePrompt with a short visual description. Leave imageUrl empty—it will be filled separately via DALL-E.
+Always fill imagePrompt with a short visual description. Leave imageUrl empty.
 
 **When generating concepts**, produce:
 {
@@ -125,7 +127,7 @@ Always fill imagePrompt with a short visual description. Leave imageUrl empty—
   ]
 }
 
-Always produce valid JSON without any extra commentary or markdown (e.g., no \`\`\`json).
+Always produce valid JSON without extra commentary or markdown (e.g., no \`\`\`json).
 `,
       },
       {
@@ -133,7 +135,7 @@ Always produce valid JSON without any extra commentary or markdown (e.g., no \`\
         content: prompt,
       },
     ],
-    temperature: 0.7,
+    temperature: options.temperature || 0.7,
     response_format: { type: "json_object" },
     ...options,
   });
@@ -191,61 +193,46 @@ export const generateScript = async (
 ) => {
   const duration = parseInt(length.replace(/\D/g, ""), 10) || 5;
   const approxPages = duration;
+  const approxScenes = Math.round(duration / 1.2);
+  const minScenes = Math.max(3, Math.floor(approxScenes * 0.75));
+  const maxScenes = Math.ceil(approxScenes * 1.25);
 
   let structureGuide = "";
   let numActs = 1;
-  let minScenes = 0;
-  let maxScenes = 0;
   let numCharacters = 3;
   let synopsisLength = "150 words";
 
   // Adjust structure based on duration
   if (duration <= 1) {
     structureGuide = "A very concise script with 1-2 scenes, minimal dialogue, focus on visual storytelling.";
-    minScenes = 1;
-    maxScenes = 2;
     numCharacters = 1;
     synopsisLength = "50 words";
   } else if (duration <= 5) {
     structureGuide = "A short script with 3-5 scenes, concise dialogue, and clear setup/resolution.";
-    minScenes = 3;
-    maxScenes = 5;
     numCharacters = 2;
     synopsisLength = "100 words";
   } else if (duration <= 10) {
     structureGuide = "A short film with 5-8 scenes, clear setup, conflict, and resolution, with engaging dialogue.";
-    minScenes = 5;
-    maxScenes = 8;
     numCharacters = 3;
     synopsisLength = "150 words";
   } else if (duration <= 15) {
     structureGuide = "A short film with 8-10 scenes, structured in 2 acts: setup and resolution, with character depth.";
-    minScenes = 8;
-    maxScenes = 10;
     numCharacters = 4;
     synopsisLength = "200 words";
   } else if (duration <= 30) {
-    structureGuide = "A mid-length film with 15-20 scenes in 3 acts: beginning (25%), middle (50%), end (25%). Include subplots and character arcs.";
-    minScenes = 15;
-    maxScenes = 20;
+    structureGuide = "A mid-length film with exactly 15-20 scenes in 3 acts: beginning (25%), middle (50%), end (25%). Include subplots, detailed action lines, and character arcs to fill exactly 30 pages.";
     numCharacters = 5;
     synopsisLength = "250 words";
   } else if (duration <= 60) {
-    structureGuide = "A feature-length film with 25-30 scenes in 3 acts: setup (25%), confrontation (50%), resolution (25%). Include detailed subplots and character development.";
-    minScenes = 25;
-    maxScenes = 30;
+    structureGuide = "A feature-length film with exactly 25-30 scenes in 3 acts: setup (25%), confrontation (50%), resolution (25%). Include detailed subplots and character development to fill exactly 60 pages.";
     numCharacters = 6;
     synopsisLength = "400 words";
   } else if (duration <= 120) {
-    structureGuide = "A full feature film with 35-45 scenes in 3 acts: setup (25%), confrontation (50%), resolution (25%). Include complex subplots, deep character arcs, and thematic depth.";
-    minScenes = 35;
-    maxScenes = 45;
+    structureGuide = "A full feature film with exactly 35-45 scenes in 3 acts: setup (25%), confrontation (50%), resolution (25%). Include complex subplots, deep character arcs, and thematic depth to fill exactly 120 pages.";
     numCharacters = 8;
     synopsisLength = "500 words";
   } else {
-    structureGuide = "A feature-length film with 35-45 scenes in 3 acts, with complex narrative and character development.";
-    minScenes = 35;
-    maxScenes = 45;
+    structureGuide = "A feature-length film with exactly 35-45 scenes in 3 acts, with complex narrative and character development to fill exactly 120 pages.";
     numCharacters = 8;
     synopsisLength = "500 words";
   }
@@ -257,25 +244,24 @@ Genre: ${genre}
 Duration: ${duration} minutes
 
 - Logline (1-2 sentences, concise and compelling)
-- Synopsis (up to ${synopsisLength}, summarizing the story with clear stakes and tone)
+- Synopsis (exactly ${synopsisLength}, summarizing the story with clear stakes and tone)
 - A professional film script of exactly ${approxPages} pages in proper screenplay format.
 ${structureGuide}
 Include:
   • Scene headings (e.g., INT. FOREST - DAY)
-  • Action lines in present tense, vivid and detailed
-  • Character names uppercase and centered
+  • Action lines in present tense, vivid and detailed, to ensure the script fills ${approxPages} pages
+  • Exactly ${numCharacters} distinct characters with clear roles and dialogue, uppercase names for dialogue
   • Dialogue indented under character names, natural and genre-appropriate
   • No camera directions or lens specifications
-  • Exactly ${minScenes}-${maxScenes} scenes, each 1-3 pages
-  • ${numCharacters} distinct characters with clear roles and dialogue
+  • Exactly ${minScenes}-${maxScenes} scenes, each 1-3 pages, totaling ${approxPages} pages
 Use standard screenplay format:
 - Scene headings: INT./EXT. LOCATION - TIME
 - Action lines: Describe visuals, characters, actions in present tense
 - Character names: Uppercase for dialogue
 - Dialogue: Under character name
 - Transitions: Only if necessary (e.g., CUT TO:)
-Ensure the script is approximately ${approxPages} pages (1 page ≈ 1 minute) with detailed descriptions and dialogue to fill the length.
-- A JSON array named "shortScript" for storyboarding, with approximately ${minScenes * 2} items, each containing:
+Ensure the script is exactly ${approxPages} pages (1 page ≈ 1 minute, ~40 lines/page) with detailed descriptions and dialogue to fill the length.
+- A JSON array named "shortScript" for storyboarding, with exactly ${minScenes * 2} items, each containing:
   • scene (short title matching script headings)
   • shotNumber (e.g., "1A", increment sequentially)
   • description (2-3 sentences describing visuals and action)
@@ -298,9 +284,7 @@ Return a JSON object with keys:
 - shortScript
 `;
 
-  // Calculate tokens: ~200 tokens/page + 1000 for logline/synopsis/shortScript
-  const maxTokens = Math.min(16384, approxPages * 200 + 1000);
-  let result = await callOpenAI(prompt, { max_tokens: maxTokens });
+  let result = await callOpenAI(prompt, { max_tokens: Math.min(16384, approxPages * 250 + 1500), temperature: 0.5 });
 
   let data;
   try {
@@ -315,17 +299,20 @@ Return a JSON object with keys:
     };
   }
 
-  // Validate script length and scene count
+  // Validate script length, scene count, and character count
   const scriptLines = data.scriptText.split("\n").length;
+  const estPages = Math.round(scriptLines / 40);
   const sceneCount = (data.scriptText.match(/^(INT\.|EXT\.)/gm) || []).length;
-  const estPages = Math.round(scriptLines / 40); // Rough estimate: 40 lines per page in screenplay format
-  const isValid = estPages >= approxPages * 0.8 && sceneCount >= minScenes && sceneCount <= maxScenes;
+  const characterCount = (data.scriptText.match(/^[A-Z\s]+$/gm) || []).filter((name: string) => name.trim().length > 0).length;
+  const isValid = estPages >= approxPages * 0.9 && estPages <= approxPages * 1.1 &&
+                  sceneCount >= minScenes && sceneCount <= maxScenes &&
+                  characterCount <= numCharacters + 2;
 
-  // Retry if script is too short or has incorrect scene count
-  if (!isValid && duration > 5) { // Allow some leniency for very short scripts
-    console.warn(`Initial script invalid: ${estPages} pages, ${sceneCount} scenes. Retrying...`);
-    const retryPrompt = `${prompt}\n\nPrevious attempt produced ${estPages} pages and ${sceneCount} scenes, which is incorrect. Ensure exactly ${approxPages} pages and ${minScenes}-${maxScenes} scenes.`;
-    result = await callOpenAI(retryPrompt, { max_tokens: maxTokens + 500 });
+  // Retry if script is invalid
+  if (!isValid) {
+    console.warn(`Initial script invalid: ${estPages} pages, ${sceneCount} scenes, ${characterCount} characters. Retrying...`);
+    const retryPrompt = `${prompt}\n\nPrevious attempt produced ${estPages} pages, ${sceneCount} scenes, and ${characterCount} characters, which is incorrect. Ensure exactly ${approxPages} pages, ${minScenes}-${maxScenes} scenes, and no more than ${numCharacters} characters.`;
+    result = await callOpenAI(retryPrompt, { max_tokens: Math.min(16384, approxPages * 250 + 2000), temperature: 0.5 });
     try {
       data = JSON.parse(result);
     } catch (e) {
@@ -333,10 +320,14 @@ Return a JSON object with keys:
     }
   }
 
+  // Final validation
+  const finalEstPages = Math.round(data.scriptText.split("\n").length / 40);
+  const finalSceneCount = (data.scriptText.match(/^(INT\.|EXT\.)/gm) || []).length;
+  const finalCharacterCount = (data.scriptText.match(/^[A-Z\s]+$/gm) || []).filter((name: string) => name.trim().length > 0).length;
   console.log("Generated script:", {
-    pages: estPages,
-    scenes: sceneCount,
-    characters: (data.scriptText.match(/^[A-Z\s]+$/gm) || []).length,
+    pages: finalEstPages,
+    scenes: finalSceneCount,
+    characters: finalCharacterCount,
   });
 
   return {
@@ -350,11 +341,14 @@ Return a JSON object with keys:
 };
 
 export const generateCharacters = async (script: string, genre: string) => {
+  const duration = parseInt(script.match(/\d+/)?.[0] || "5", 10);
+  const maxCharacters = duration <= 1 ? 1 : duration <= 5 ? 2 : duration <= 10 ? 3 : duration <= 15 ? 4 : duration <= 30 ? 5 : duration <= 60 ? 6 : 8;
+
   const prompt = `
 Given the following film script:
 ${script}
 
-Generate a list of 3-8 main characters (based on script length), each with:
+Generate a list of exactly ${maxCharacters} main characters, each with:
 - name (string)
 - role (Protagonist, Antagonist, Supporting, etc.)
 - description (1-sentence description)
@@ -368,7 +362,7 @@ Ensure characters match those in the script for consistency.
 Return a JSON object with key "characters" containing the array of character objects.
 `;
 
-  const result = await callOpenAI(prompt);
+  const result = await callOpenAI(prompt, { temperature: 0.5 });
 
   let characters: Character[] = [];
   try {
@@ -395,7 +389,8 @@ Return a JSON object with key "characters" containing the array of character obj
           hairColor: char.hairColor,
           clothingColor: char.clothingColor,
           mood: char.mood,
-        }));
+        }))
+        .slice(0, maxCharacters);
     }
   } catch (e) {
     console.error("Failed to parse character JSON:", e, result);
@@ -460,7 +455,7 @@ Also generate 3-5 visual references. For each reference, include:
 Return a JSON object with keys: concept, visualReferences.
 `;
 
-  const result = await callOpenAI(prompt);
+  const result = await callOpenAI(prompt, { temperature: 0.5 });
 
   let jsonData: any = {};
   try {
@@ -549,7 +544,7 @@ All images are black-and-white pencil sketches in a professional comic-book stor
 Return a JSON object with key "storyboard" containing the array.
 `;
 
-  const result = await callOpenAI(prompt);
+  const result = await callOpenAI(prompt, { temperature: 0.5 });
 
   let frames: StoryboardFrame[] = [];
   try {
@@ -619,14 +614,14 @@ function determineNumberOfImages(scriptLength: string): number {
   const mins = parseInt(scriptLength.replace(/\D/g, ""), 10);
   if (isNaN(mins)) return 6;
 
-  if (mins <= 1) return 3;
-  if (mins <= 5) return 6;
-  if (mins <= 10) return 8;
-  if (mins <= 15) return 10;
-  if (mins <= 30) return 15;
-  if (mins <= 60) return 25;
-  if (mins <= 120) return 40;
-  return 6;
+  if (mins <= 1) return 6;
+  if (mins <= 5) return 12;
+  if (mins <= 10) return 20;
+  if (mins <= 15) return 30;
+  if (mins <= 30) return 45; // Increased for richer storyboard
+  if (mins <= 60) return 75; // Increased for richer storyboard
+  if (mins <= 120) return 120; // Increased for richer storyboard
+  return 60;
 }
 
 // ---------- Budget ----------
@@ -668,7 +663,7 @@ ${lowBudgetMode ?
 - Tips and alternatives can be empty if not applicable.`}
 `;
 
-  const result = await callOpenAI(prompt);
+  const result = await callOpenAI(prompt, { temperature: 0.5 });
 
   let parsed;
   try {
@@ -706,7 +701,7 @@ For each day, include:
 Return a JSON object with key "schedule" containing the array.
 `;
 
-  const result = await callOpenAI(prompt);
+  const result = await callOpenAI(prompt, { temperature: 0.5 });
 
   let schedule = [];
   try {
@@ -762,7 +757,7 @@ RULES:
 Return a JSON object with key "locations" containing the array of location objects.
 `;
 
-  const result = await callOpenAI(prompt);
+  const result = await callOpenAI(prompt, { temperature: 0.5 });
 
   let locations: any[] = [];
   try {
@@ -779,30 +774,31 @@ Return a JSON object with key "locations" containing the array of location objec
 // ---------- Sound Assets ----------
 
 export const generateSoundAssets = async (script: string, genre: string) => {
+  const duration = parseInt(script.match(/\d+/)?.[0] || "5", 10);
+  const numAssets = duration <= 15 ? 5 : 8;
+
   const prompt = `
 Given this film script:
 ${script}
 
-Generate 5-8 sound assets for a ${genre} film, each with:
+Generate exactly ${numAssets} sound assets for a ${genre} film, each with:
 - name (unique and descriptive, reflecting the asset's purpose)
 - type (music, sfx, dialogue, ambient)
-- duration (minimum 10 seconds, formatted as "MM:SS", adjust based on script length: up to 1:00 for features)
-- description (highly detailed, vivid description for AI audio generation, including specific elements, tones, intensities, and how it enhances the scene's mood or action; at least 50 words)
-- scenes (array of scene names or descriptions where the asset appears, matching script headings)
+- duration (minimum 10 seconds, up to 1:00 for features, formatted as "MM:SS")
+- description (highly detailed, vivid, at least 50 words, for AI audio generation, including specific elements, tones, intensities, and scene enhancement)
+- scenes (array of scene names matching script headings)
 - audioUrl (empty string)
 
 Ensure assets align with the script's scenes and tone.
 Return a JSON object with key "soundAssets" containing the array of sound asset objects.
 `;
 
-  const result = await callOpenAI(prompt);
+  const result = await callOpenAI(prompt, { temperature: 0.5 });
 
   let soundAssets: any[] = [];
   try {
     const parsed = JSON.parse(result);
     soundAssets = parsed.soundAssets || [];
-    // Adjust duration based on script length
-    const duration = parseInt(script.match(/\d+/)?.[0] || "5", 10);
     const minDuration = duration >= 60 ? "00:30" : "00:10";
     soundAssets = soundAssets.map((asset) => {
       const [mins, secs] = asset.duration.split(":").map(Number);
@@ -811,7 +807,7 @@ Return a JSON object with key "soundAssets" containing the array of sound asset 
       return {
         ...asset,
         duration: adjustedDuration,
-        audioUrl: "", // Ensure audioUrl is empty
+        audioUrl: "",
       };
     });
   } catch (e) {
