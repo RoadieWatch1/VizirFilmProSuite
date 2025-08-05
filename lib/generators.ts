@@ -7,7 +7,10 @@ const openai = new OpenAI({
 
 // ---------- Helper for chat calls ----------
 
-async function callOpenAI(prompt: string): Promise<string> {
+async function callOpenAI(
+  prompt: string,
+  options: Partial<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming> = {}
+): Promise<string> {
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
@@ -132,6 +135,7 @@ Always produce valid JSON without any extra commentary or markdown (e.g., no \`\
     ],
     temperature: 0.7,
     response_format: { type: "json_object" },
+    ...options,
   });
 
   let content = completion.choices[0].message.content ?? "";
@@ -185,18 +189,60 @@ export const generateScript = async (
   genre: string,
   length: string
 ) => {
+  const duration = parseInt(length.replace(/\D/g, ""), 10) || 5;
+  const approxPages = duration;
+
+  let structureGuide = "";
+  let numActs = 1;
+  let approxScenes = Math.round(duration / 2); // Assuming average scene length of 2 minutes/pages
+
+  if (duration <= 5) {
+    // Very short: simple structure
+    structureGuide = "A very concise script with 1-2 scenes, minimal dialogue, focus on visual storytelling.";
+    approxScenes = 1 + Math.floor(duration / 2);
+  } else if (duration <= 15) {
+    // Short film: basic setup and resolution
+    numActs = 2;
+    structureGuide = "Structure as a short film with setup and resolution. Include detailed scene descriptions and dialogue.";
+    approxScenes = Math.round(duration / 1.5);
+  } else if (duration <= 30) {
+    // Mid-length: introduce some complexity
+    numActs = 3;
+    structureGuide = "Structure in 3 acts: beginning, middle, end. Build tension with multiple scenes.";
+    approxScenes = Math.round(duration / 1.5);
+  } else {
+    // Feature length: full 3-act structure
+    numActs = 3;
+    structureGuide = `Full feature script in 3 acts with approximately ${approxScenes} scenes total. 
+Act 1: Setup (about 25% of script), Act 2: Confrontation (about 50%), Act 3: Resolution (about 25%).
+Include subplots, character development, detailed dialogues, and action descriptions to fill the length.`;
+    approxScenes = Math.round(duration / 1.2); // Slightly more scenes for longer films
+  }
+
   const prompt = `
-Generate a film project with the following:
+Generate a film project based on the following idea: ${idea}
+
+Genre: ${genre}
 
 - Logline (1-2 sentences, concise and compelling)
-- Synopsis (max 150 words, summarizing the story)
-- A professional film script of approximately ${length} in proper screenplay format (2-5 pages). Include:
+- Synopsis (summarizing the story, appropriate length: up to 200 words for short films, up to 500 words for features)
+- A professional film script of approximately ${approxPages} pages in proper screenplay format. 
+${structureGuide}
+Include:
   • Scene headings (e.g., INT. FOREST - DAY)
   • Action lines in present tense
   • Character names uppercase and centered
   • Dialogue indented under character names
   • No camera directions or lens specifications
-- A JSON array named "shortScript" for storyboarding, with each item containing:
+Use standard screenplay format:
+- Scene headings: INT./EXT. LOCATION - TIME
+- Action lines: Describe visuals, characters, actions in present tense.
+- Character names: Uppercase for dialogue.
+- Dialogue: Under character name.
+- Transitions: Only if necessary (e.g., CUT TO:).
+Aim for an average scene length of 1-3 pages, totaling around ${approxScenes} scenes.
+Make descriptions vivid and detailed, dialogues natural and revealing, to ensure the script reaches the appropriate length.
+- A JSON array named "shortScript" for storyboarding, with approximately ${approxScenes * 2} items, each containing:
   • scene (short title)
   • shotNumber (e.g., "1A")
   • description (2-3 sentences)
@@ -217,12 +263,10 @@ Return a JSON object with keys:
 - synopsis
 - scriptText
 - shortScript
-
-Idea: ${idea}
-Genre: ${genre}
 `;
 
-  const result = await callOpenAI(prompt);
+  const maxTokens = Math.min(16384, approxPages * 200 + 1000); // Adjust max_tokens based on length; assume ~200 tokens per page + extra for other parts
+  const result = await callOpenAI(prompt, { max_tokens: maxTokens });
 
   let data;
   try {
