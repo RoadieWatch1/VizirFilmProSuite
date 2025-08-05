@@ -71,10 +71,3 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ received: true });
 }
-
-// Important for raw body parsing (Stripe requires the unparsed body)
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
