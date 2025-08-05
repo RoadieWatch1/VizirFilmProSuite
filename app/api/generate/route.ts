@@ -1,7 +1,8 @@
+// C:\Users\vizir\VizirPro\app\api\generate\route.ts
 import { NextRequest, NextResponse } from "next/server";
 import {
   generateScript,
-  generateCharacters, // FIXED: Added missing import for generateCharacters
+  generateCharacters,
   generateStoryboard,
   generateConcept,
   generateBudget,
@@ -19,6 +20,15 @@ async function generateScriptData(
   movieGenre: string,
   scriptLength: string
 ) {
+  // Validate scriptLength
+  const validDurations = ["1 min", "5 min", "10 min", "15 min", "30 min", "60 min", "120 min"];
+  if (!validDurations.includes(scriptLength)) {
+    console.warn(`Invalid scriptLength: ${scriptLength}. Defaulting to 5 min.`);
+    scriptLength = "5 min";
+  }
+
+  console.log("Generating script data with:", { movieIdea, movieGenre, scriptLength });
+
   const {
     logline,
     synopsis,
@@ -28,20 +38,36 @@ async function generateScriptData(
     themes,
   } = await generateScript(movieIdea, movieGenre, scriptLength);
 
+  // Generate characters based on the script
+  let characters: Character[] = [];
+  try {
+    const charactersResult = await generateCharacters(scriptText, movieGenre);
+    characters = charactersResult.characters || [];
+    console.log(`Generated ${characters.length} characters`);
+  } catch (error) {
+    console.error("Failed to generate characters:", error);
+  }
+
+  // Estimate page count and scene count for logging
+  const estPages = Math.round(scriptText.split("\n").length / 40);
+  const sceneCount = (scriptText.match(/^(INT\.|EXT\.)/gm) || []).length;
+  console.log("Script stats:", { estPages, sceneCount, characterCount: characters.length });
+
   return {
     logline,
     synopsis,
-    script,
+    script: scriptText,
     scriptText,
     shortScript,
     themes,
-    characters: [],
+    characters,
   };
 }
 
 export async function POST(request: NextRequest) {
+  let body: any = {}; // Declare body outside try block
   try {
-    const body = await request.json();
+    body = await request.json();
     const {
       movieIdea,
       movieGenre,
@@ -52,14 +78,14 @@ export async function POST(request: NextRequest) {
       characters,
     } = body;
 
+    console.log("Received request:", { movieIdea, movieGenre, scriptLength, step });
+
     if (
       !movieIdea &&
-      !["storyboard", "schedule", "locations", "sound", "characters"].includes(
-        step
-      )
+      !["storyboard", "schedule", "locations", "sound", "characters"].includes(step)
     ) {
       return NextResponse.json(
-        { error: "Movie idea and genre are required." },
+        { error: "Movie idea and genre are required for script generation." },
         { status: 400 }
       );
     }
@@ -68,21 +94,22 @@ export async function POST(request: NextRequest) {
       case "characters": {
         if (!scriptContent) {
           return NextResponse.json(
-            {
-              error: "scriptContent is required for generating characters.",
-            },
+            { error: "scriptContent is required for generating characters." },
             { status: 400 }
           );
         }
-        const charactersResult = await generateCharacters(
-          scriptContent,
-          movieGenre
-        );
+        const charactersResult = await generateCharacters(scriptContent, movieGenre);
         return NextResponse.json(charactersResult);
       }
 
       case "concept": {
-        const result = await generateConcept(script || "", movieGenre || "");
+        if (!script) {
+          return NextResponse.json(
+            { error: "Script is required for generating concept." },
+            { status: 400 }
+          );
+        }
+        const result = await generateConcept(script, movieGenre || "");
         return NextResponse.json(result);
       }
 
@@ -90,8 +117,7 @@ export async function POST(request: NextRequest) {
         if (!movieIdea || !movieGenre || !scriptLength) {
           return NextResponse.json(
             {
-              error:
-                "movieIdea, movieGenre, and scriptLength are required for storyboard.",
+              error: "movieIdea, movieGenre, and scriptLength are required for storyboard.",
             },
             { status: 400 }
           );
@@ -138,43 +164,58 @@ export async function POST(request: NextRequest) {
       }
 
       case "budget": {
-        const result = await generateBudget(
-          movieGenre || "",
-          scriptLength || ""
-        );
+        if (!movieGenre || !scriptLength) {
+          return NextResponse.json(
+            { error: "movieGenre and scriptLength are required for budget." },
+            { status: 400 }
+          );
+        }
+        const result = await generateBudget(movieGenre, scriptLength);
         return NextResponse.json(result);
       }
 
       case "schedule": {
-        const result = await generateSchedule(
-          script || "",
-          scriptLength || ""
-        );
+        if (!script || !scriptLength) {
+          return NextResponse.json(
+            { error: "script and scriptLength are required for schedule." },
+            { status: 400 }
+          );
+        }
+        const result = await generateSchedule(script, scriptLength);
         return NextResponse.json(result);
       }
 
       case "locations": {
-        const result = await generateLocations(
-          script || "",
-          movieGenre || ""
-        );
+        if (!script) {
+          return NextResponse.json(
+            { error: "script is required for locations." },
+            { status: 400 }
+          );
+        }
+        const result = await generateLocations(script, movieGenre || "");
         return NextResponse.json(result);
       }
 
       case "sound": {
-        const result = await generateSoundAssets(
-          script || "",
-          movieGenre || ""
-        );
+        if (!script) {
+          return NextResponse.json(
+            { error: "script is required for sound assets." },
+            { status: 400 }
+          );
+        }
+        const result = await generateSoundAssets(script, movieGenre || "");
         return NextResponse.json(result);
       }
 
       default: {
-        const scriptResult = await generateScriptData(
-          movieIdea || "",
-          movieGenre || "",
-          scriptLength || ""
-        );
+        if (!movieIdea || !movieGenre || !scriptLength) {
+          return NextResponse.json(
+            { error: "movieIdea, movieGenre, and scriptLength are required for script generation." },
+            { status: 400 }
+          );
+        }
+
+        const scriptResult = await generateScriptData(movieIdea, movieGenre, scriptLength);
 
         return NextResponse.json({
           idea: movieIdea,
@@ -182,20 +223,19 @@ export async function POST(request: NextRequest) {
           length: scriptLength,
           logline: scriptResult.logline,
           synopsis: scriptResult.synopsis,
-          script: scriptResult.scriptText || "",
-          shortScript: scriptResult.shortScript || [],
-          themes: scriptResult.themes || [],
-          characters: scriptResult.characters || [],
+          script: scriptResult.scriptText,
+          shortScript: scriptResult.shortScript,
+          themes: scriptResult.themes,
+          characters: scriptResult.characters,
         });
       }
     }
   } catch (error: any) {
-    console.error("[API] Generation error:", error);
+    console.error("[API] Generation error:", error, { input: body || "No input available" });
     return NextResponse.json(
       {
-        error:
-          error?.message ||
-          "Failed to generate film package. Please try again later.",
+        error: error?.message || "Failed to generate film package. Please try again later.",
+        details: error?.stack || "No stack trace available",
       },
       { status: 500 }
     );

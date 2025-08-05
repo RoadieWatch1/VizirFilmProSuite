@@ -194,58 +194,91 @@ export const generateScript = async (
 
   let structureGuide = "";
   let numActs = 1;
-  let approxScenes = Math.round(duration / 2); // Assuming average scene length of 2 minutes/pages
+  let minScenes = 0;
+  let maxScenes = 0;
+  let numCharacters = 3;
+  let synopsisLength = "150 words";
 
-  if (duration <= 5) {
-    // Very short: simple structure
+  // Adjust structure based on duration
+  if (duration <= 1) {
     structureGuide = "A very concise script with 1-2 scenes, minimal dialogue, focus on visual storytelling.";
-    approxScenes = 1 + Math.floor(duration / 2);
+    minScenes = 1;
+    maxScenes = 2;
+    numCharacters = 1;
+    synopsisLength = "50 words";
+  } else if (duration <= 5) {
+    structureGuide = "A short script with 3-5 scenes, concise dialogue, and clear setup/resolution.";
+    minScenes = 3;
+    maxScenes = 5;
+    numCharacters = 2;
+    synopsisLength = "100 words";
+  } else if (duration <= 10) {
+    structureGuide = "A short film with 5-8 scenes, clear setup, conflict, and resolution, with engaging dialogue.";
+    minScenes = 5;
+    maxScenes = 8;
+    numCharacters = 3;
+    synopsisLength = "150 words";
   } else if (duration <= 15) {
-    // Short film: basic setup and resolution
-    numActs = 2;
-    structureGuide = "Structure as a short film with setup and resolution. Include detailed scene descriptions and dialogue.";
-    approxScenes = Math.round(duration / 1.5);
+    structureGuide = "A short film with 8-10 scenes, structured in 2 acts: setup and resolution, with character depth.";
+    minScenes = 8;
+    maxScenes = 10;
+    numCharacters = 4;
+    synopsisLength = "200 words";
   } else if (duration <= 30) {
-    // Mid-length: introduce some complexity
-    numActs = 3;
-    structureGuide = "Structure in 3 acts: beginning, middle, end. Build tension with multiple scenes.";
-    approxScenes = Math.round(duration / 1.5);
+    structureGuide = "A mid-length film with 15-20 scenes in 3 acts: beginning (25%), middle (50%), end (25%). Include subplots and character arcs.";
+    minScenes = 15;
+    maxScenes = 20;
+    numCharacters = 5;
+    synopsisLength = "250 words";
+  } else if (duration <= 60) {
+    structureGuide = "A feature-length film with 25-30 scenes in 3 acts: setup (25%), confrontation (50%), resolution (25%). Include detailed subplots and character development.";
+    minScenes = 25;
+    maxScenes = 30;
+    numCharacters = 6;
+    synopsisLength = "400 words";
+  } else if (duration <= 120) {
+    structureGuide = "A full feature film with 35-45 scenes in 3 acts: setup (25%), confrontation (50%), resolution (25%). Include complex subplots, deep character arcs, and thematic depth.";
+    minScenes = 35;
+    maxScenes = 45;
+    numCharacters = 8;
+    synopsisLength = "500 words";
   } else {
-    // Feature length: full 3-act structure
-    numActs = 3;
-    structureGuide = `Full feature script in 3 acts with approximately ${approxScenes} scenes total. 
-Act 1: Setup (about 25% of script), Act 2: Confrontation (about 50%), Act 3: Resolution (about 25%).
-Include subplots, character development, detailed dialogues, and action descriptions to fill the length.`;
-    approxScenes = Math.round(duration / 1.2); // Slightly more scenes for longer films
+    structureGuide = "A feature-length film with 35-45 scenes in 3 acts, with complex narrative and character development.";
+    minScenes = 35;
+    maxScenes = 45;
+    numCharacters = 8;
+    synopsisLength = "500 words";
   }
 
   const prompt = `
 Generate a film project based on the following idea: ${idea}
 
 Genre: ${genre}
+Duration: ${duration} minutes
 
 - Logline (1-2 sentences, concise and compelling)
-- Synopsis (summarizing the story, appropriate length: up to 200 words for short films, up to 500 words for features)
-- A professional film script of approximately ${approxPages} pages in proper screenplay format. 
+- Synopsis (up to ${synopsisLength}, summarizing the story with clear stakes and tone)
+- A professional film script of exactly ${approxPages} pages in proper screenplay format.
 ${structureGuide}
 Include:
   • Scene headings (e.g., INT. FOREST - DAY)
-  • Action lines in present tense
+  • Action lines in present tense, vivid and detailed
   • Character names uppercase and centered
-  • Dialogue indented under character names
+  • Dialogue indented under character names, natural and genre-appropriate
   • No camera directions or lens specifications
+  • Exactly ${minScenes}-${maxScenes} scenes, each 1-3 pages
+  • ${numCharacters} distinct characters with clear roles and dialogue
 Use standard screenplay format:
 - Scene headings: INT./EXT. LOCATION - TIME
-- Action lines: Describe visuals, characters, actions in present tense.
-- Character names: Uppercase for dialogue.
-- Dialogue: Under character name.
-- Transitions: Only if necessary (e.g., CUT TO:).
-Aim for an average scene length of 1-3 pages, totaling around ${approxScenes} scenes.
-Make descriptions vivid and detailed, dialogues natural and revealing, to ensure the script reaches the appropriate length.
-- A JSON array named "shortScript" for storyboarding, with approximately ${approxScenes * 2} items, each containing:
-  • scene (short title)
-  • shotNumber (e.g., "1A")
-  • description (2-3 sentences)
+- Action lines: Describe visuals, characters, actions in present tense
+- Character names: Uppercase for dialogue
+- Dialogue: Under character name
+- Transitions: Only if necessary (e.g., CUT TO:)
+Ensure the script is approximately ${approxPages} pages (1 page ≈ 1 minute) with detailed descriptions and dialogue to fill the length.
+- A JSON array named "shortScript" for storyboarding, with approximately ${minScenes * 2} items, each containing:
+  • scene (short title matching script headings)
+  • shotNumber (e.g., "1A", increment sequentially)
+  • description (2-3 sentences describing visuals and action)
   • cameraAngle (e.g., "Close-Up")
   • cameraMovement (e.g., "Static")
   • lens (e.g., "35mm")
@@ -256,7 +289,7 @@ Make descriptions vivid and detailed, dialogues natural and revealing, to ensure
   • notes (directorial notes)
   • imagePrompt (1-sentence visual description for DALL-E)
   • imageUrl (empty string)
-  • coverageShots (array of same fields, 4 per scene)
+  • coverageShots (array of 4 sub-shots with same fields)
 
 Return a JSON object with keys:
 - logline
@@ -265,8 +298,9 @@ Return a JSON object with keys:
 - shortScript
 `;
 
-  const maxTokens = Math.min(16384, approxPages * 200 + 1000); // Adjust max_tokens based on length; assume ~200 tokens per page + extra for other parts
-  const result = await callOpenAI(prompt, { max_tokens: maxTokens });
+  // Calculate tokens: ~200 tokens/page + 1000 for logline/synopsis/shortScript
+  const maxTokens = Math.min(16384, approxPages * 200 + 1000);
+  let result = await callOpenAI(prompt, { max_tokens: maxTokens });
 
   let data;
   try {
@@ -281,7 +315,29 @@ Return a JSON object with keys:
     };
   }
 
-  console.log("Generated script:", data.scriptText);
+  // Validate script length and scene count
+  const scriptLines = data.scriptText.split("\n").length;
+  const sceneCount = (data.scriptText.match(/^(INT\.|EXT\.)/gm) || []).length;
+  const estPages = Math.round(scriptLines / 40); // Rough estimate: 40 lines per page in screenplay format
+  const isValid = estPages >= approxPages * 0.8 && sceneCount >= minScenes && sceneCount <= maxScenes;
+
+  // Retry if script is too short or has incorrect scene count
+  if (!isValid && duration > 5) { // Allow some leniency for very short scripts
+    console.warn(`Initial script invalid: ${estPages} pages, ${sceneCount} scenes. Retrying...`);
+    const retryPrompt = `${prompt}\n\nPrevious attempt produced ${estPages} pages and ${sceneCount} scenes, which is incorrect. Ensure exactly ${approxPages} pages and ${minScenes}-${maxScenes} scenes.`;
+    result = await callOpenAI(retryPrompt, { max_tokens: maxTokens + 500 });
+    try {
+      data = JSON.parse(result);
+    } catch (e) {
+      console.error("Failed to parse retry script JSON:", e, result);
+    }
+  }
+
+  console.log("Generated script:", {
+    pages: estPages,
+    scenes: sceneCount,
+    characters: (data.scriptText.match(/^[A-Z\s]+$/gm) || []).length,
+  });
 
   return {
     logline: data.logline || "",
@@ -295,10 +351,10 @@ Return a JSON object with keys:
 
 export const generateCharacters = async (script: string, genre: string) => {
   const prompt = `
-Given the following film script or story content:
+Given the following film script:
 ${script}
 
-Generate a list of 3-5 main characters, each with:
+Generate a list of 3-8 main characters (based on script length), each with:
 - name (string)
 - role (Protagonist, Antagonist, Supporting, etc.)
 - description (1-sentence description)
@@ -308,6 +364,7 @@ Generate a list of 3-5 main characters, each with:
 - clothingColor (hex code, e.g., "#A33C2F")
 - mood (string, e.g., "serious" or "playful")
 
+Ensure characters match those in the script for consistency.
 Return a JSON object with key "characters" containing the array of character objects.
 `;
 
@@ -726,14 +783,15 @@ export const generateSoundAssets = async (script: string, genre: string) => {
 Given this film script:
 ${script}
 
-Generate 3-5 sound assets for a ${genre} film, each with:
+Generate 5-8 sound assets for a ${genre} film, each with:
 - name (unique and descriptive, reflecting the asset's purpose)
 - type (music, sfx, dialogue, ambient)
-- duration (minimum 10 seconds, formatted as "MM:SS", e.g., "00:10")
+- duration (minimum 10 seconds, formatted as "MM:SS", adjust based on script length: up to 1:00 for features)
 - description (highly detailed, vivid description for AI audio generation, including specific elements, tones, intensities, and how it enhances the scene's mood or action; at least 50 words)
-- scenes (array of scene names or descriptions where the asset appears)
+- scenes (array of scene names or descriptions where the asset appears, matching script headings)
 - audioUrl (empty string)
 
+Ensure assets align with the script's scenes and tone.
 Return a JSON object with key "soundAssets" containing the array of sound asset objects.
 `;
 
@@ -743,12 +801,19 @@ Return a JSON object with key "soundAssets" containing the array of sound asset 
   try {
     const parsed = JSON.parse(result);
     soundAssets = parsed.soundAssets || [];
-    // Ensure minimum duration of 10 seconds
-    soundAssets = soundAssets.map((asset) => ({
-      ...asset,
-      duration: asset.duration && parseInt(asset.duration.split(":")[1]) >= 10 ? asset.duration : "00:10",
-      audioUrl: "", // Ensure audioUrl is empty
-    }));
+    // Adjust duration based on script length
+    const duration = parseInt(script.match(/\d+/)?.[0] || "5", 10);
+    const minDuration = duration >= 60 ? "00:30" : "00:10";
+    soundAssets = soundAssets.map((asset) => {
+      const [mins, secs] = asset.duration.split(":").map(Number);
+      const totalSecs = mins * 60 + secs;
+      const adjustedDuration = totalSecs >= 10 ? asset.duration : minDuration;
+      return {
+        ...asset,
+        duration: adjustedDuration,
+        audioUrl: "", // Ensure audioUrl is empty
+      };
+    });
   } catch (e) {
     console.error("Failed to parse sound assets JSON:", e, result);
     soundAssets = [];
