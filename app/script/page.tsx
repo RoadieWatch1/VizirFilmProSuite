@@ -107,7 +107,7 @@ export default function ScriptPage() {
   };
 
   const pageCount =
-    typeof script === "string" ? Math.ceil(script.length / 250) : 0;
+    typeof script === "string" ? Math.round(script.split("\n").length / 55) : 0;
 
   const estRuntime = `${pageCount} min`;
 

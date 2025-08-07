@@ -12,7 +12,7 @@ async function callOpenAI(
   options: Partial<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming> = {}
 ): Promise<string> {
   const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: "gpt-4o",  // Switched to gpt-4o for better instruction following on long outputs
     messages: [
       {
         role: "system",
@@ -243,20 +243,21 @@ export const generateScript = async (
     synopsisLength = "500 words";
   }
 
-  // Common prompt base
+  // Common prompt base with enhanced verbosity instructions
   const basePrompt = `
   Generate a professional screenplay for a ${genre} film based on this idea:
   ${idea}
 
   Specifications:
   - Title: Create a catchy title
-  - Length: Aim for ${approxPages} pages total (1 page ≈ 1 minute, ~250 words or 40-50 lines per page)
+  - Length: Aim for ${approxPages} pages total (1 page ≈ 1 minute, ~250 words or 55 lines per page including blanks)
   - Scenes: Between ${minScenes} and ${maxScenes} scenes
   - Characters: Up to ${numCharacters} main characters
   - Structure: ${structureGuide}
   - Acts: ${numActs} acts
   - Format: Standard screenplay format ONLY (no extra text)
   - Themes: 3-5 key themes
+  - Style: Use a highly verbose, detailed writing style. Expand every action line with rich environmental descriptions, character emotions, sensory details, and internal thoughts. Extend dialogues with natural back-and-forth, subtext, and pauses. Do not summarize or shorten; fill the exact required length with comprehensive content.
   `;
 
   if (duration <= 15) {
@@ -293,8 +294,8 @@ export const generateScript = async (
     const outlineParsed = JSON.parse(outlineResult);
     const shortScript: ShortScriptItem[] = outlineParsed.shortScript;
 
-    // Calculate chunks: Increase to 20 pages per chunk since max output is 16k tokens (~48 pages)
-    const pagesPerChunk = 20;
+    // Calculate chunks: Increased to 40 pages per chunk (safe within 16k tokens ~50 pages max)
+    const pagesPerChunk = 40;
     const numChunks = Math.ceil(approxPages / pagesPerChunk);
     let fullScriptText = "";
     let previousChunk = "";
@@ -314,7 +315,7 @@ export const generateScript = async (
       Previous script chunk (continue seamlessly): ${previousChunk}
 
       Now generate the FULL screenplay text ONLY for scenes ${startScene} to ${endScene}.
-      Ensure this chunk is at least ${pagesPerChunk} pages long (~${pagesPerChunk * 250} words, 40-50 lines per page). Do not stop early; fill with detailed action, dialogue, and descriptions to meet the length.
+      Ensure this chunk is at least ${pagesPerChunk} pages long (~${pagesPerChunk * 250} words, 55 lines per page). Do not stop early or summarize; expand with verbose details, extended dialogues, character backstories in action lines, and rich sensory descriptions to fully meet the length.
       Start directly with the scene heading for scene ${startScene}.
       Output JSON with:
       - chunkText: The screenplay text for this chunk
@@ -322,16 +323,17 @@ export const generateScript = async (
       let chunkResult;
       let attempts = 0;
       do {
-        chunkResult = await callOpenAI(chunkPrompt, { temperature: 0.3, max_tokens: 16384 });
+        chunkResult = await callOpenAI(chunkPrompt, { temperature: 0.1, max_tokens: 16384 });  // Lower temp for strict adherence
         const chunkParsed = JSON.parse(chunkResult);
-        const chunkLength = Math.round(chunkParsed.chunkText.split("\n").length / 40);
+        const chunkLength = Math.round(chunkParsed.chunkText.split("\n").length / 55);  // Updated to 55 lines/page for accuracy
+        console.log(`Chunk ${chunk} attempt ${attempts + 1}: Generated ${chunkLength} pages`);
         if (chunkLength >= pagesPerChunk * 0.8) {
           fullScriptText += chunkParsed.chunkText + "\n\n";
           previousChunk = chunkParsed.chunkText;
           break;
         }
         attempts++;
-      } while (attempts < 3); // Retry up to 3 times if too short
+      } while (attempts < 5);  // Increased retries
     }
 
     return {
@@ -375,7 +377,7 @@ export const generateScript = async (
     }
 
     // Now generate script chunks
-    const pagesPerChunk = 20;
+    const pagesPerChunk = 40;
     const numChunks = Math.ceil(approxPages / pagesPerChunk);
     let fullScriptText = "";
     let previousChunk = "";
@@ -395,7 +397,7 @@ export const generateScript = async (
       Previous script chunk (continue seamlessly): ${previousChunk}
 
       Now generate the FULL screenplay text ONLY for scenes ${startScene} to ${endScene}.
-      Ensure this chunk is at least ${pagesPerChunk} pages long (~${pagesPerChunk * 250} words, 40-50 lines per page). Do not stop early; fill with detailed action, dialogue, and descriptions to meet the length.
+      Ensure this chunk is at least ${pagesPerChunk} pages long (~${pagesPerChunk * 250} words, 55 lines per page). Do not stop early or summarize; expand with verbose details, extended dialogues, character backstories in action lines, and rich sensory descriptions to fully meet the length.
       Start directly with the scene heading for scene ${startScene}.
       Output JSON with:
       - chunkText: The screenplay text for this chunk
@@ -403,16 +405,17 @@ export const generateScript = async (
       let chunkResult;
       let attempts = 0;
       do {
-        chunkResult = await callOpenAI(chunkPrompt, { temperature: 0.3, max_tokens: 16384 });
+        chunkResult = await callOpenAI(chunkPrompt, { temperature: 0.1, max_tokens: 16384 });
         const chunkParsed = JSON.parse(chunkResult);
-        const chunkLength = Math.round(chunkParsed.chunkText.split("\n").length / 40);
+        const chunkLength = Math.round(chunkParsed.chunkText.split("\n").length / 55);
+        console.log(`Chunk ${chunk} attempt ${attempts + 1}: Generated ${chunkLength} pages`);
         if (chunkLength >= pagesPerChunk * 0.8) {
           fullScriptText += chunkParsed.chunkText + "\n\n";
           previousChunk = chunkParsed.chunkText;
           break;
         }
         attempts++;
-      } while (attempts < 3);
+      } while (attempts < 5);
     }
 
     return {

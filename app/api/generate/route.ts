@@ -34,6 +34,7 @@ async function generateScriptData(
     synopsis,
     scriptText,
     shortScript,
+    themes,
   } = await generateScript(movieIdea, movieGenre, scriptLength);
 
   // Generate characters based on the script
@@ -57,6 +58,7 @@ async function generateScriptData(
     script: scriptText,
     scriptText,
     shortScript,
+    themes,
     characters,
   };
 }
@@ -222,6 +224,7 @@ export async function POST(request: NextRequest) {
           synopsis: scriptResult.synopsis,
           script: scriptResult.scriptText,
           shortScript: scriptResult.shortScript,
+          themes: scriptResult.themes,
           characters: scriptResult.characters,
         });
       }
