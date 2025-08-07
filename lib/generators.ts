@@ -1,4 +1,3 @@
-
 // C:\Users\vizir\VizirPro\lib\generators.ts
 import OpenAI from "openai";
 
@@ -211,274 +210,146 @@ export const generateScript = async (
     structureGuide = "A short script with 3-5 scenes, concise dialogue, and clear setup/resolution.";
     numCharacters = 2;
     synopsisLength = "100 words";
-  } else if (duration <= 10) {
-    structureGuide = "A short film with 5-8 scenes, clear setup, conflict, and resolution, with engaging dialogue.";
-    numCharacters = 3;
-    synopsisLength = "150 words";
   } else if (duration <= 15) {
-    structureGuide = "A short film with 8-10 scenes, structured in 2 acts: setup and resolution, with character depth.";
-    numCharacters = 4;
+    structureGuide = "A structured short film with setup, confrontation, and resolution. Include rising action and a twist.";
+    numActs = 3;
+    numCharacters = 3;
     synopsisLength = "200 words";
   } else if (duration <= 30) {
-    structureGuide = "A mid-length film with exactly 15-20 scenes in 3 acts: beginning (25%), middle (50%), end (25%). Include subplots, detailed action lines, and character arcs to fill exactly 30 pages.";
-    numCharacters = 5;
-    synopsisLength = "250 words";
+    structureGuide = "A three-act structure with clear plot points, character arcs, and subplots.";
+    numActs = 3;
+    numCharacters = 4;
+    synopsisLength = "300 words";
   } else if (duration <= 60) {
-    structureGuide = "A feature-length film with exactly 25-30 scenes in 3 acts: setup (25%), confrontation (50%), resolution (25%). Include detailed subplots and character development to fill exactly 60 pages.";
-    numCharacters = 6;
+    structureGuide = "A feature-length script with detailed three-act structure, multiple subplots, and deep character development.";
+    numActs = 3;
+    numCharacters = 5;
     synopsisLength = "400 words";
-  } else if (duration <= 120) {
-    structureGuide = "A full feature film with exactly 35-45 scenes in 3 acts: setup (25%), confrontation (50%), resolution (25%). Include complex subplots, deep character arcs, and thematic depth to fill exactly 120 pages.";
-    numCharacters = 8;
-    synopsisLength = "500 words";
   } else {
-    structureGuide = "A feature-length film with exactly 35-45 scenes in 3 acts, with complex narrative and character development to fill exactly 120 pages.";
-    numCharacters = 8;
+    structureGuide = "A full feature film with extended three-act structure, complex subplots, ensemble cast, and thematic depth.";
+    numActs = 3;
+    numCharacters = 7;
     synopsisLength = "500 words";
   }
 
-  const prompt = `
-Generate a film project based on the following idea: ${idea}
+  // Common prompt base
+  const basePrompt = `
+  Generate a professional screenplay for a ${genre} film based on this idea:
+  ${idea}
 
-Genre: ${genre}
-Duration: ${duration} minutes
+  Specifications:
+  - Title: Create a catchy title
+  - Length: Aim for ${approxPages} pages total (1 page ≈ 1 minute)
+  - Scenes: Between ${minScenes} and ${maxScenes} scenes
+  - Characters: Up to ${numCharacters} main characters
+  - Structure: ${structureGuide}
+  - Acts: ${numActs} acts
+  - Format: Standard screenplay format ONLY (no extra text)
+  `;
 
-- Logline (1-2 sentences, concise and compelling)
-- Synopsis (exactly ${synopsisLength}, summarizing the story with clear stakes and tone)
-- A professional film script of exactly ${approxPages} pages in proper screenplay format.
-${structureGuide}
-Include:
-  • Scene headings (e.g., INT. FOREST - DAY)
-  • Action lines in present tense, vivid and detailed, to ensure the script fills ${approxPages} pages
-  • Exactly ${numCharacters} distinct characters with clear roles and dialogue, uppercase names for dialogue
-  • Dialogue indented under character names, natural and genre-appropriate
-  • No camera directions or lens specifications
-  • Exactly ${minScenes}-${maxScenes} scenes, each 1-3 pages, totaling ${approxPages} pages
-Use standard screenplay format:
-- Scene headings: INT./EXT. LOCATION - TIME
-- Action lines: Describe visuals, characters, actions in present tense
-- Character names: Uppercase for dialogue
-- Dialogue: Under character name
-- Transitions: Only if necessary (e.g., CUT TO:)
-Ensure the script is exactly ${approxPages} pages (1 page ≈ 1 minute, ~40 lines/page) with detailed descriptions and dialogue to fill the length.
-- A JSON array named "shortScript" for storyboarding, with exactly ${minScenes * 2} items, each containing:
-  • scene (short title matching script headings)
-  • shotNumber (e.g., "1A", increment sequentially)
-  • description (2-3 sentences describing visuals and action)
-  • cameraAngle (e.g., "Close-Up")
-  • cameraMovement (e.g., "Static")
-  • lens (e.g., "35mm")
-  • lighting (e.g., "Soft natural light")
-  • duration (e.g., "5 seconds")
-  • dialogue (spoken lines, if any)
-  • soundEffects (e.g., "Birds chirping")
-  • notes (directorial notes)
-  • imagePrompt (1-sentence visual description for DALL-E)
-  • imageUrl (empty string)
-  • coverageShots (array of 4 sub-shots with same fields)
+  if (duration <= 15) {
+    // Single call for short scripts
+    const prompt = `${basePrompt}
+    Output JSON with:
+    - logline: 1-sentence summary
+    - synopsis: ${synopsisLength} synopsis
+    - scriptText: Full screenplay text
+    - shortScript: Array of objects with {scene: heading, description: action summary, dialogue: key lines}
+    `;
+    const result = await callOpenAI(prompt);
+    const parsed = JSON.parse(result);
+    return {
+      logline: parsed.logline,
+      synopsis: parsed.synopsis,
+      scriptText: parsed.scriptText,
+      shortScript: parsed.shortScript,
+    };
+  } else {
+    // Multi-part for long scripts
+    // Step 1: Generate outline (logline, synopsis, detailed shortScript)
+    const outlinePrompt = `${basePrompt}
+    First, create a detailed outline.
+    Output JSON with:
+    - logline: 1-sentence summary
+    - synopsis: ${synopsisLength} synopsis
+    - shortScript: Array of detailed scene objects (exactly ${approxScenes} scenes) with {act: number, sceneNumber: number, heading: "INT/EXT. LOCATION - TIME", summary: 100-200 word action/dialogue summary}
+    `;
+    const outlineResult = await callOpenAI(outlinePrompt);
+    const outlineParsed = JSON.parse(outlineResult);
+    const shortScript = outlineParsed.shortScript;
 
-Return a JSON object with keys:
-- logline
-- synopsis
-- scriptText
-- shortScript
-`;
+    // Calculate chunks: Aim for ~10 pages per chunk to fit token limits
+    const pagesPerChunk = 10;
+    const numChunks = Math.ceil(approxPages / pagesPerChunk);
+    let fullScriptText = "";
+    let previousChunk = "";
 
-  let result = await callOpenAI(prompt, { max_tokens: Math.min(16384, approxPages * 250 + 1500), temperature: 0.5 });
+    for (let chunk = 1; chunk <= numChunks; chunk++) {
+      const startScene = Math.floor((chunk - 1) * (approxScenes / numChunks)) + 1;
+      const endScene = Math.min(startScene + Math.floor(approxScenes / numChunks) - 1, approxScenes);
+      const chunkScenes = shortScript.slice(startScene - 1, endScene);
 
-  let data;
-  try {
-    data = JSON.parse(result);
-  } catch (e) {
-    console.error("Failed to parse script JSON:", e, result);
-    data = {
-      logline: "",
-      synopsis: "",
-      scriptText: "",
-      shortScript: [],
+      const chunkPrompt = `${basePrompt}
+      Using this outline:
+      Logline: ${outlineParsed.logline}
+      Synopsis: ${outlineParsed.synopsis}
+      Full scene outline: ${JSON.stringify(shortScript)}
+
+      Previous script chunk (continue seamlessly): ${previousChunk}
+
+      Now generate the FULL screenplay text ONLY for scenes ${startScene} to ${endScene} (${pagesPerChunk} pages worth).
+      Start directly with the scene heading for scene ${startScene}.
+      Output JSON with:
+      - chunkText: The screenplay text for this chunk
+      `;
+      const chunkResult = await callOpenAI(chunkPrompt, { temperature: 0.5 });
+      const chunkParsed = JSON.parse(chunkResult);
+      fullScriptText += chunkParsed.chunkText + "\n\n";
+      previousChunk = chunkParsed.chunkText;
+    }
+
+    return {
+      logline: outlineParsed.logline,
+      synopsis: outlineParsed.synopsis,
+      scriptText: fullScriptText.trim(),
+      shortScript: shortScript,
     };
   }
-
-  // Validate script length, scene count, and character count
-  const scriptLines = data.scriptText.split("\n").length;
-  const estPages = Math.round(scriptLines / 40);
-  const sceneCount = (data.scriptText.match(/^(INT\.|EXT\.)/gm) || []).length;
-  const characterCount = (data.scriptText.match(/^[A-Z\s]+$/gm) || []).filter((name: string) => name.trim().length > 0).length;
-  const isValid = estPages >= approxPages * 0.9 && estPages <= approxPages * 1.1 &&
-                  sceneCount >= minScenes && sceneCount <= maxScenes &&
-                  characterCount <= numCharacters + 2;
-
-  // Retry if script is invalid
-  if (!isValid) {
-    console.warn(`Initial script invalid: ${estPages} pages, ${sceneCount} scenes, ${characterCount} characters. Retrying...`);
-    const retryPrompt = `${prompt}\n\nPrevious attempt produced ${estPages} pages, ${sceneCount} scenes, and ${characterCount} characters, which is incorrect. Ensure exactly ${approxPages} pages, ${minScenes}-${maxScenes} scenes, and no more than ${numCharacters} characters.`;
-    result = await callOpenAI(retryPrompt, { max_tokens: Math.min(16384, approxPages * 250 + 2000), temperature: 0.5 });
-    try {
-      data = JSON.parse(result);
-    } catch (e) {
-      console.error("Failed to parse retry script JSON:", e, result);
-    }
-  }
-
-  // Final validation
-  const finalEstPages = Math.round(data.scriptText.split("\n").length / 40);
-  const finalSceneCount = (data.scriptText.match(/^(INT\.|EXT\.)/gm) || []).length;
-  const finalCharacterCount = (data.scriptText.match(/^[A-Z\s]+$/gm) || []).filter((name: string) => name.trim().length > 0).length;
-  console.log("Generated script:", {
-    pages: finalEstPages,
-    scenes: finalSceneCount,
-    characters: finalCharacterCount,
-  });
-
-  return {
-    logline: data.logline || "",
-    synopsis: data.synopsis || "",
-    script: data.scriptText || "",
-    scriptText: data.scriptText || "",
-    shortScript: data.shortScript || [],
-    themes: ["Determination", "Growth", "Conflict Resolution", "Human Nature"],
-  };
 };
 
 export const generateCharacters = async (script: string, genre: string) => {
-  const duration = parseInt(script.match(/\d+/)?.[0] || "5", 10);
-  const maxCharacters = duration <= 1 ? 1 : duration <= 5 ? 2 : duration <= 10 ? 3 : duration <= 15 ? 4 : duration <= 30 ? 5 : duration <= 60 ? 6 : 8;
-
   const prompt = `
-Given the following film script:
+Given this film script:
 ${script}
 
-Generate a list of exactly ${maxCharacters} main characters, each with:
-- name (string)
-- role (Protagonist, Antagonist, Supporting, etc.)
-- description (1-sentence description)
-- traits (array of 3-5 strings)
-- skinColor (hex code, e.g., "#8C5D3C")
-- hairColor (hex code, e.g., "#1C1C1C")
-- clothingColor (hex code, e.g., "#A33C2F")
-- mood (string, e.g., "serious" or "playful")
+Generate detailed character profiles for ALL main and supporting characters in this ${genre} film.
+For each character, include:
+- name
+- role (protagonist, antagonist, etc.)
+- description (physical appearance, age, background)
+- traits (array of 3-5 personality traits)
+- skinColor (e.g., fair, olive)
+- hairColor (e.g., blonde, black)
+- clothingColor (dominant outfit colors)
+- mood (overall emotional state)
+- visualDescription (detailed for AI image generation)
+- imageUrl (empty string)
 
-Ensure characters match those in the script for consistency.
-Return a JSON object with key "characters" containing the array of character objects.
+Return a JSON object with key "characters" containing the array.
 `;
 
   const result = await callOpenAI(prompt, { temperature: 0.5 });
 
-  let characters: Character[] = [];
+  let characters: any[] = [];
   try {
     const parsed = JSON.parse(result);
-    if (Array.isArray(parsed.characters)) {
-      characters = parsed.characters
-        .filter(
-          (char: any) =>
-            typeof char?.name === "string" &&
-            typeof char?.description === "string" &&
-            typeof char?.role === "string" &&
-            Array.isArray(char?.traits) &&
-            typeof char?.skinColor === "string" &&
-            typeof char?.hairColor === "string" &&
-            typeof char?.clothingColor === "string" &&
-            typeof char?.mood === "string"
-        )
-        .map((char: any) => ({
-          name: char.name,
-          role: char.role,
-          description: char.description,
-          traits: char.traits,
-          skinColor: char.skinColor,
-          hairColor: char.hairColor,
-          clothingColor: char.clothingColor,
-          mood: char.mood,
-        }))
-        .slice(0, maxCharacters);
-    }
+    characters = parsed.characters || [];
   } catch (e) {
-    console.error("Failed to parse character JSON:", e, result);
+    console.error("Failed to parse characters JSON:", e, result);
     characters = [];
   }
 
-  // Generate images for each character
-  for (let i = 0; i < characters.length; i++) {
-    const char = characters[i];
-    const visualDescription = [
-      `Character name: ${char.name}`,
-      `Description: ${char.description}`,
-      char.role ? `Role: ${char.role}` : "",
-      char.mood ? `Mood: ${char.mood}` : "",
-      char.skinColor ? `Skin color: ${char.skinColor}` : "",
-      char.hairColor ? `Hair color: ${char.hairColor}` : "",
-      char.clothingColor ? `Clothing color: ${char.clothingColor}` : "",
-    ]
-      .filter(Boolean)
-      .join(". ");
-    const imagePrompt = `Photorealistic full-body portrait of a real person portraying the character. ${visualDescription}. Cinematic style, high detail, natural colors, realistic textures and lighting. Ensure full head and body are in frame, no cropping. The image should look like a professional actor in costume, ready for film production.`;
-
-    try {
-      const dalleImage = await openai.images.generate({
-        model: "dall-e-3",
-        prompt: imagePrompt,
-        n: 1,
-        size: "1024x1792",
-      });
-
-      characters[i].imageUrl = dalleImage.data?.[0]?.url || "";
-      characters[i].visualDescription = visualDescription;
-      console.log(`Generated image for ${char.name}:`, characters[i].imageUrl);
-    } catch (err) {
-      console.error("Failed to generate image for character:", char.name, err);
-      characters[i].imageUrl = "";
-      characters[i].visualDescription = visualDescription;
-    }
-  }
-
-  console.log("Generated characters:", characters);
-
   return { characters };
-};
-
-export const generateConcept = async (script: string, genre: string) => {
-  const prompt = `
-Given the following film script or synopsis:
-${script}
-
-Generate a cinematic concept document for a ${genre} film including:
-- Visual style and color palette
-- Camera techniques
-- Lighting approach
-- Thematic symbolism
-- Production values
-
-Also generate 3-5 visual references. For each reference, include:
-- short description (max 20 words)
-- a realistic or placeholder image URL
-
-Return a JSON object with keys: concept, visualReferences.
-`;
-
-  const result = await callOpenAI(prompt, { temperature: 0.5 });
-
-  let jsonData: any = {};
-  try {
-    jsonData = JSON.parse(result);
-  } catch (e) {
-    console.error("Failed to parse concept JSON:", e, result);
-    jsonData = {
-      concept: {},
-      visualReferences: [],
-    };
-  }
-
-  return {
-    concept: {
-      visualStyle: jsonData.concept?.visualStyle || "",
-      colorPalette: jsonData.concept?.colorPalette || "",
-      cameraTechniques: jsonData.concept?.cameraTechniques || "",
-      lightingApproach: jsonData.concept?.lightingApproach || "",
-      thematicSymbolism: jsonData.concept?.thematicSymbolism || "",
-      productionValues: jsonData.concept?.productionValues || "",
-    },
-    visualReferences: jsonData.visualReferences || [],
-  };
 };
 
 export const generateStoryboard = async ({
@@ -492,178 +363,112 @@ export const generateStoryboard = async ({
   movieGenre: string;
   script: string;
   scriptLength: string;
-  characters?: Character[];
-}): Promise<StoryboardFrame[]> => {
-  const numImages = determineNumberOfImages(scriptLength);
-
-  const characterBlock = (characters || [])
-    .map(
-      (c) =>
-        `Character: ${c.name}. Description: ${
-          c.visualDescription || c.description || ""
-        }. Skin: ${c.skinColor || "default"}. Hair: ${c.hairColor || "default"}. Clothing: ${c.clothingColor || "default"}. Mood: ${c.mood || "neutral"}.`
-    )
-    .join("\n");
+  characters: Character[];
+}) => {
+  const duration = parseInt(scriptLength.replace(/\D/g, ""), 10) || 5;
+  const numFrames = duration <= 5 ? 8 : duration <= 15 ? 15 : duration <= 30 ? 25 : 40;
+  const coveragePerFrame = duration > 15 ? 3 : 2;
 
   const prompt = `
-You are a professional storyboard artist creating a high-quality film storyboard.
+Generate a detailed storyboard for this ${movieGenre} film idea: ${movieIdea}
 
-Film Idea: ${movieIdea}
-Genre: ${movieGenre}
-Script:
+Full Script:
 ${script}
 
-Characters for visual consistency:
-${characterBlock}
+Characters:
+${JSON.stringify(characters)}
 
-Break the script into exactly ${numImages} key scenes chronologically, covering the main plot beats from beginning to end. For each scene, generate a main storyboard frame using professional conventions: varied shot compositions, dynamic angles, and ties to narrative tension.
+Specifications:
+- Exactly ${numFrames} main frames
+- Each main frame includes ${coveragePerFrame} coverage shots
+- Total shots: ${numFrames * (coveragePerFrame + 1)}
+- Distribute evenly across script scenes
+- For each frame/shot:
+  - scene: Scene heading from script
+  - shotNumber: Sequential (e.g., 1A, 1B)
+  - description: Visual action
+  - cameraAngle
+  - cameraMovement
+  - lens
+  - lighting
+  - duration (seconds)
+  - dialogue (if any)
+  - soundEffects
+  - notes
+  - imagePrompt (for AI generation)
+  - imageUrl (empty)
 
-Generate a JSON object with key "storyboard" containing an array of exactly ${numImages} frame objects.
-
-For each frame, include ALL these fields:
-- scene (short professional title, e.g., "INT. WAREHOUSE CONFRONTATION - NIGHT")
-- shotNumber (e.g., "1A", increment sequentially)
-- description (2-3 detailed sentences on visuals, action, and dramatic intent)
-- cameraAngle (e.g., "Low Angle Wide Shot" for power dynamics)
-- cameraMovement (e.g., "Slow Dolly In" or "Static" if none)
-- lens (e.g., "Wide 24mm" for establishing shots)
-- lighting (e.g., "Harsh shadows from overhead fluorescents, cool blue tones for suspense")
-- duration (e.g., "5 seconds")
-- dialogue (key lines spoken, if any)
-- soundEffects (notable audio cues, e.g., "Echoing footsteps")
-- notes (directorial notes, e.g., "Build tension with close framing")
-- imagePrompt (detailed 1-2 sentence visual description for DALL-E: include setting details, character appearances/actions/expressions, composition, mood, genre style—e.g., "A tense low-angle wide shot of [character description] confronting [another] in a dimly lit warehouse, harsh shadows on faces, industrial background with flickering lights, comic-book style black-and-white pencil sketch")
-- imageUrl (leave empty)
-
-For each frame, also generate exactly 4 coverageShots (alternative angles for editing coverage in the same scene). Coverage shots provide variety: e.g., 1. Extreme close-up on face/emotion, 2. Over-the-shoulder for dialogue, 3. Medium reaction shot, 4. Dutch angle or special effect for tension (adapt to scene).
-
-coverageShots is an array of 4 objects, each with ALL the same fields as a main frame (including unique imagePrompt tailored to the angle). Do not skip or leave empty.
-
-All images are black-and-white pencil sketches in a professional comic-book storyboard style.
-
-Return a JSON object with key "storyboard" containing the array.
+Return JSON with key "storyboard" containing array of main frames, each with coverageShots array.
 `;
 
-  const result = await callOpenAI(prompt, { temperature: 0.5 });
+  const result = await callOpenAI(prompt, { temperature: 0.6 });
 
-  let frames: StoryboardFrame[] = [];
+  let storyboard: StoryboardFrame[] = [];
   try {
     const parsed = JSON.parse(result);
-    frames = parsed.storyboard || [];
-    if (!Array.isArray(frames) || frames.length !== numImages) {
-      console.warn(`Storyboard generated ${frames.length} frames instead of ${numImages}.`);
-    }
+    storyboard = parsed.storyboard || [];
   } catch (e) {
     console.error("Failed to parse storyboard JSON:", e, result);
-    frames = [];
+    storyboard = [];
   }
 
-  for (let i = 0; i < frames.length; i++) {
-    const frame = frames[i];
-
-    if (frame.imagePrompt) {
-      try {
-        const dalleImage = await openai.images.generate({
-          model: "dall-e-3",
-          prompt: `${frame.imagePrompt}. Professional comic-book style black-and-white pencil sketch.`,
-          n: 1,
-          size: "1024x1024",
-        });
-
-        if (dalleImage.data && dalleImage.data.length > 0) {
-          frames[i].imageUrl = dalleImage.data[0].url;
-        } else {
-          frames[i].imageUrl = "";
-        }
-      } catch (err) {
-        console.error("DALL·E error:", err);
-        frames[i].imageUrl = "";
-      }
-    }
-
-    if (frame.coverageShots && frame.coverageShots.length > 0) {
-      for (let j = 0; j < frame.coverageShots.length; j++) {
-        const shot = frame.coverageShots[j];
-        if (shot.imagePrompt) {
-          try {
-            const dalleImage = await openai.images.generate({
-              model: "dall-e-3",
-              prompt: `${shot.imagePrompt}. Professional comic-book style black-and-white pencil sketch.`,
-              n: 1,
-              size: "512x512",
-            });
-
-            if (dalleImage.data && dalleImage.data.length > 0) {
-              frame.coverageShots[j].imageUrl = dalleImage.data[0].url;
-            } else {
-              frame.coverageShots[j].imageUrl = "";
-            }
-          } catch (err) {
-            console.error("DALL·E error (coverage shot):", err);
-            frame.coverageShots[j].imageUrl = "";
-          }
-        }
-      }
-    }
-  }
-
-  return frames;
+  return storyboard;
 };
 
-function determineNumberOfImages(scriptLength: string): number {
-  const mins = parseInt(scriptLength.replace(/\D/g, ""), 10);
-  if (isNaN(mins)) return 6;
-
-  if (mins <= 1) return 6;
-  if (mins <= 5) return 12;
-  if (mins <= 10) return 20;
-  if (mins <= 15) return 30;
-  if (mins <= 30) return 45; // Increased for richer storyboard
-  if (mins <= 60) return 75; // Increased for richer storyboard
-  if (mins <= 120) return 120; // Increased for richer storyboard
-  return 60;
-}
-
-// ---------- Budget ----------
-
-export const generateBudget = async (
-  genre: string,
-  length: string,
-  lowBudgetMode: boolean = false
-) => {
+export const generateConcept = async (script: string, genre: string) => {
   const prompt = `
-Generate a professional film budget breakdown for a ${length} ${genre} film.
+Based on this ${genre} film script:
+${script}
 
-Return JSON with key "categories" containing an array of category objects, each with:
-- name
-- amount (in USD)
-- percentage (total ~100%)
-- items (array of strings)
-- tips (array of strings)
-- alternatives (array of strings)
+Generate a visual concept including:
+- concept object with visualStyle, colorPalette, cameraTechniques, lightingApproach, thematicSymbolism, productionValues
+- visualReferences: array of 3-5 objects with description and imageUrl (real URLs to reference images)
 
-Include categories:
-- Pre-production
-- Cast
-- Crew
-- Locations
-- Equipment
-- Art Department
-- Post-Production
-- Music & Sound
-- Marketing
-- Miscellaneous
-
-${lowBudgetMode ?
-`For lowBudgetMode:
-- Reduce amounts by ~50%.
-- Provide cost-saving tips and low-cost alternatives for each category.` :
-`For standard budget:
-- Use industry-standard costs.
-- Tips and alternatives can be empty if not applicable.`}
+Return the JSON object directly.
 `;
 
-  const result = await callOpenAI(prompt, { temperature: 0.5 });
+  const result = await callOpenAI(prompt, { temperature: 0.7 });
+
+  let concept = {};
+  let visualReferences = [];
+  try {
+    const parsed = JSON.parse(result);
+    concept = parsed.concept || {};
+    visualReferences = parsed.visualReferences || [];
+  } catch (e) {
+    console.error("Failed to parse concept JSON:", e, result);
+  }
+
+  return { concept, visualReferences };
+};
+
+export const generateBudget = async (genre: string, length: string) => {
+  const duration = parseInt(length.replace(/\D/g, ""), 10) || 5;
+  const baseBudget = duration <= 5 ? 5000 : duration <= 15 ? 15000 : duration <= 30 ? 50000 : duration <= 60 ? 100000 : 200000;
+  const genreMultiplier = genre.toLowerCase().includes("sci-fi") || genre.toLowerCase().includes("action") ? 1.5 : 1;
+
+  const prompt = `
+Generate a detailed film budget breakdown for a ${genre} film of ${length} length.
+Total estimated budget: $${baseBudget * genreMultiplier}
+
+Categories:
+- Pre-Production (script, casting)
+- Production (crew, equipment, locations)
+- Post-Production (editing, sound, VFX)
+- Marketing/Distribution
+
+For each category:
+- name
+- amount
+- percentage (of total)
+- items (array of sub-items with costs)
+- tips (array of budget tips)
+- alternatives (low-cost options)
+
+Return JSON with key "categories" containing the array.
+`;
+
+  const result = await callOpenAI(prompt, { temperature: 0.4 });
 
   let parsed;
   try {
@@ -673,12 +478,15 @@ ${lowBudgetMode ?
     parsed = { categories: [] };
   }
 
-  if (lowBudgetMode && parsed.categories) {
-    parsed.categories = parsed.categories.map((cat: any) => ({
-      ...cat,
-      amount: Math.round(cat.amount * 0.5),
-    }));
-  }
+  // Adjust for low budget if needed
+  // Assuming lowBudgetMode from store, but since it's not passed, skip or assume false
+  // For example:
+  // if (lowBudgetMode) {
+  //   parsed.categories = parsed.categories.map((cat: any) => ({
+  //     ...cat,
+  //     amount: Math.round(cat.amount * 0.5),
+  //   }));
+  // }
 
   return parsed;
 };
