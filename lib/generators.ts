@@ -269,7 +269,7 @@ export const generateScript = async (
     - shortScript: Array of objects with {scene: heading, description: action summary, dialogue: key lines}
     - themes: Array of 3-5 themes
     `;
-    const result = await callOpenAI(prompt);
+    const result = await callOpenAI(prompt, { max_tokens: 16384 });
     const parsed = JSON.parse(result);
     return {
       logline: parsed.logline,
@@ -289,12 +289,12 @@ export const generateScript = async (
     - shortScript: Array of detailed scene objects (exactly ${approxScenes} scenes) with {act: number, sceneNumber: number, heading: "INT/EXT. LOCATION - TIME", summary: 100-200 word action/dialogue summary}
     - themes: Array of 3-5 themes
     `;
-    const outlineResult = await callOpenAI(outlinePrompt);
+    const outlineResult = await callOpenAI(outlinePrompt, { max_tokens: 16384 });
     const outlineParsed = JSON.parse(outlineResult);
     const shortScript: ShortScriptItem[] = outlineParsed.shortScript;
 
-    // Calculate chunks: Aim for ~5 pages per chunk to fit token limits safely
-    const pagesPerChunk = 5;
+    // Calculate chunks: Increase to 20 pages per chunk since max output is 16k tokens (~48 pages)
+    const pagesPerChunk = 20;
     const numChunks = Math.ceil(approxPages / pagesPerChunk);
     let fullScriptText = "";
     let previousChunk = "";
@@ -314,7 +314,7 @@ export const generateScript = async (
       Previous script chunk (continue seamlessly): ${previousChunk}
 
       Now generate the FULL screenplay text ONLY for scenes ${startScene} to ${endScene}.
-      Ensure this chunk is exactly ${pagesPerChunk} pages long (~${pagesPerChunk * 250} words, 40-50 lines per page).
+      Ensure this chunk is at least ${pagesPerChunk} pages long (~${pagesPerChunk * 250} words, 40-50 lines per page). Do not stop early; fill with detailed action, dialogue, and descriptions to meet the length.
       Start directly with the scene heading for scene ${startScene}.
       Output JSON with:
       - chunkText: The screenplay text for this chunk
@@ -322,7 +322,7 @@ export const generateScript = async (
       let chunkResult;
       let attempts = 0;
       do {
-        chunkResult = await callOpenAI(chunkPrompt, { temperature: 0.5 });
+        chunkResult = await callOpenAI(chunkPrompt, { temperature: 0.3, max_tokens: 16384 });
         const chunkParsed = JSON.parse(chunkResult);
         const chunkLength = Math.round(chunkParsed.chunkText.split("\n").length / 40);
         if (chunkLength >= pagesPerChunk * 0.8) {
@@ -355,7 +355,7 @@ export const generateScript = async (
     - actSummaries: Array of ${numActs} objects with {act: number, summary: 200-300 word act summary}
     - themes: Array of 3-5 themes
     `;
-    const highLevelResult = await callOpenAI(highLevelPrompt);
+    const highLevelResult = await callOpenAI(highLevelPrompt, { max_tokens: 16384 });
     outlineParsed = JSON.parse(highLevelResult);
 
     for (let act = 1; act <= numActs; act++) {
@@ -369,13 +369,13 @@ export const generateScript = async (
       Output JSON with:
       - actShortScript: Array of scene objects with {act: ${act}, sceneNumber: number, heading: "INT/EXT. LOCATION - TIME", summary: 100-200 word action/dialogue summary}
       `;
-      const actResult = await callOpenAI(actPrompt);
+      const actResult = await callOpenAI(actPrompt, { max_tokens: 16384 });
       const actParsed = JSON.parse(actResult);
       shortScript = shortScript.concat(actParsed.actShortScript);
     }
 
     // Now generate script chunks
-    const pagesPerChunk = 5;
+    const pagesPerChunk = 20;
     const numChunks = Math.ceil(approxPages / pagesPerChunk);
     let fullScriptText = "";
     let previousChunk = "";
@@ -395,7 +395,7 @@ export const generateScript = async (
       Previous script chunk (continue seamlessly): ${previousChunk}
 
       Now generate the FULL screenplay text ONLY for scenes ${startScene} to ${endScene}.
-      Ensure this chunk is exactly ${pagesPerChunk} pages long (~${pagesPerChunk * 250} words, 40-50 lines per page).
+      Ensure this chunk is at least ${pagesPerChunk} pages long (~${pagesPerChunk * 250} words, 40-50 lines per page). Do not stop early; fill with detailed action, dialogue, and descriptions to meet the length.
       Start directly with the scene heading for scene ${startScene}.
       Output JSON with:
       - chunkText: The screenplay text for this chunk
@@ -403,7 +403,7 @@ export const generateScript = async (
       let chunkResult;
       let attempts = 0;
       do {
-        chunkResult = await callOpenAI(chunkPrompt, { temperature: 0.5 });
+        chunkResult = await callOpenAI(chunkPrompt, { temperature: 0.3, max_tokens: 16384 });
         const chunkParsed = JSON.parse(chunkResult);
         const chunkLength = Math.round(chunkParsed.chunkText.split("\n").length / 40);
         if (chunkLength >= pagesPerChunk * 0.8) {
