@@ -12,7 +12,7 @@ async function callOpenAI(
   options: Partial<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming> = {}
 ): Promise<{ content: string; finish_reason: string }> {
   const completion = await openai.chat.completions.create({
-    model: "gpt-4.1",  // Updated to GPT-4.1 for higher output limits (32k tokens)
+    model: "gpt-4o",  // Corrected to valid model gpt-4o for higher quality long-form generation
     messages: [
       {
         role: "system",
@@ -160,7 +160,7 @@ Always produce valid JSON without extra commentary or markdown (e.g., no \`\`\`j
     ],
     temperature: options.temperature || 0.7,
     response_format: { type: "json_object" },
-    max_tokens: 32768,  // Increased for GPT-4.1
+    max_tokens: 4096,  // Adjusted to max output for gpt-4o
     ...options,
   });
 
@@ -294,7 +294,7 @@ export const generateScript = async (
     - shortScript: Array of objects with {scene: heading, description: action summary, dialogue: key lines}
     - themes: Array of 3-5 themes
     `;
-    const { content } = await callOpenAI(prompt, { max_tokens: 32768 });
+    const { content } = await callOpenAI(prompt, { max_tokens: 4096 });
     const parsed = JSON.parse(content);
     return {
       logline: parsed.logline,
@@ -314,12 +314,12 @@ export const generateScript = async (
     - shortScript: Array of detailed scene objects (exactly ${approxScenes} scenes) with {act: number, sceneNumber: number, heading: "INT/EXT. LOCATION - TIME", summary: 100-200 word action/dialogue summary}
     - themes: Array of 3-5 themes
     `;
-    const { content: outlineContent } = await callOpenAI(outlinePrompt, { max_tokens: 32768 });
+    const { content: outlineContent } = await callOpenAI(outlinePrompt, { max_tokens: 4096 });
     const outlineParsed = JSON.parse(outlineContent);
     const shortScript: ShortScriptItem[] = outlineParsed.shortScript;
 
-    // Calculate chunks: Increased to 80 pages per chunk (safe within 32k tokens ~100 pages max)
-    const pagesPerChunk = 80;
+    // Calculate chunks: Adjusted to 10 pages per chunk to fit within 4k tokens (~3000 words ~12 pages)
+    const pagesPerChunk = 10;
     const numChunks = Math.ceil(approxPages / pagesPerChunk);
     let fullScriptText = "";
     let previousChunk = "";
@@ -348,7 +348,7 @@ export const generateScript = async (
       let attempts = 0;
       let finishReason = "max_tokens";
       while (finishReason === "max_tokens" || (Math.round(chunkText.split("\n").length / 55) < pagesPerChunk * 0.8 && attempts < 5)) {
-        const { content: chunkContent, finish_reason } = await callOpenAI(chunkPrompt, { temperature: 0.1, max_tokens: 32768 });
+        const { content: chunkContent, finish_reason } = await callOpenAI(chunkPrompt, { temperature: 0.1, max_tokens: 4096 });
         finishReason = finish_reason;
         const chunkParsed = JSON.parse(chunkContent);
         chunkText += chunkParsed.chunkText;
@@ -387,7 +387,7 @@ export const generateScript = async (
     - actSummaries: Array of ${numActs} objects with {act: number, summary: 200-300 word act summary}
     - themes: Array of 3-5 themes
     `;
-    const { content: highLevelContent } = await callOpenAI(highLevelPrompt, { max_tokens: 32768 });
+    const { content: highLevelContent } = await callOpenAI(highLevelPrompt, { max_tokens: 4096 });
     outlineParsed = JSON.parse(highLevelContent);
 
     for (let act = 1; act <= numActs; act++) {
@@ -401,13 +401,13 @@ export const generateScript = async (
       Output JSON with:
       - actShortScript: Array of scene objects with {act: ${act}, sceneNumber: number, heading: "INT/EXT. LOCATION - TIME", summary: 100-200 word action/dialogue summary}
       `;
-      const { content: actContent } = await callOpenAI(actPrompt, { max_tokens: 32768 });
+      const { content: actContent } = await callOpenAI(actPrompt, { max_tokens: 4096 });
       const actParsed = JSON.parse(actContent);
       shortScript = shortScript.concat(actParsed.actShortScript);
     }
 
     // Now generate script chunks
-    const pagesPerChunk = 80;
+    const pagesPerChunk = 10;
     const numChunks = Math.ceil(approxPages / pagesPerChunk);
     let fullScriptText = "";
     let previousChunk = "";
@@ -436,7 +436,7 @@ export const generateScript = async (
       let attempts = 0;
       let finishReason = "max_tokens";
       while (finishReason === "max_tokens" || (Math.round(chunkText.split("\n").length / 55) < pagesPerChunk * 0.8 && attempts < 5)) {
-        const { content: chunkContent, finish_reason } = await callOpenAI(chunkPrompt, { temperature: 0.1, max_tokens: 32768 });
+        const { content: chunkContent, finish_reason } = await callOpenAI(chunkPrompt, { temperature: 0.1, max_tokens: 4096 });
         finishReason = finish_reason;
         const chunkParsed = JSON.parse(chunkContent);
         chunkText += chunkParsed.chunkText;
