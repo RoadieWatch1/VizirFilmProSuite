@@ -10,14 +10,37 @@ const openai = new OpenAI({
 async function callOpenAI(
   prompt: string,
   options: Partial<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming> = {}
-): Promise<string> {
+): Promise<{ content: string; finish_reason: string }> {
   const completion = await openai.chat.completions.create({
-    model: "gpt-4o",  // Switched to gpt-4o for better instruction following on long outputs
+    model: "gpt-4.1",  // Updated to GPT-4.1 for higher output limits (32k tokens)
     messages: [
       {
         role: "system",
         content: `
 You are an expert film development AI.
+
+**Example of screenplay format**:
+FADE IN:
+
+INT. COFFEE SHOP - DAY
+
+JOHN, 30s, disheveled but charming, sips his coffee. The shop is bustling with PATRONS chatting. Sunlight streams through the windows, casting long shadows.
+
+JOHN
+(whispering to himself)
+Another day, another dollar.
+
+He spots MARY across the room, 20s, elegant, reading a book. He straightens up, heart racing.
+
+JOHN (CONT'D)
+Excuse me, is this seat taken?
+
+MARY looks up, smiles faintly.
+
+MARY
+No, go ahead.
+
+(Expand with more details as needed to fill length)
 
 **When generating scripts**, produce JSON like:
 {
@@ -137,6 +160,7 @@ Always produce valid JSON without extra commentary or markdown (e.g., no \`\`\`j
     ],
     temperature: options.temperature || 0.7,
     response_format: { type: "json_object" },
+    max_tokens: 32768,  // Increased for GPT-4.1
     ...options,
   });
 
@@ -149,7 +173,7 @@ Always produce valid JSON without extra commentary or markdown (e.g., no \`\`\`j
     content = content.slice(0, -3);
   }
   content = content.trim();
-  return content;
+  return { content, finish_reason: completion.choices[0].finish_reason || "stop" };
 }
 
 // ---------- Types ----------
@@ -270,8 +294,8 @@ export const generateScript = async (
     - shortScript: Array of objects with {scene: heading, description: action summary, dialogue: key lines}
     - themes: Array of 3-5 themes
     `;
-    const result = await callOpenAI(prompt, { max_tokens: 16384 });
-    const parsed = JSON.parse(result);
+    const { content } = await callOpenAI(prompt, { max_tokens: 32768 });
+    const parsed = JSON.parse(content);
     return {
       logline: parsed.logline,
       synopsis: parsed.synopsis,
@@ -290,12 +314,12 @@ export const generateScript = async (
     - shortScript: Array of detailed scene objects (exactly ${approxScenes} scenes) with {act: number, sceneNumber: number, heading: "INT/EXT. LOCATION - TIME", summary: 100-200 word action/dialogue summary}
     - themes: Array of 3-5 themes
     `;
-    const outlineResult = await callOpenAI(outlinePrompt, { max_tokens: 16384 });
-    const outlineParsed = JSON.parse(outlineResult);
+    const { content: outlineContent } = await callOpenAI(outlinePrompt, { max_tokens: 32768 });
+    const outlineParsed = JSON.parse(outlineContent);
     const shortScript: ShortScriptItem[] = outlineParsed.shortScript;
 
-    // Calculate chunks: Increased to 40 pages per chunk (safe within 16k tokens ~50 pages max)
-    const pagesPerChunk = 40;
+    // Calculate chunks: Increased to 80 pages per chunk (safe within 32k tokens ~100 pages max)
+    const pagesPerChunk = 80;
     const numChunks = Math.ceil(approxPages / pagesPerChunk);
     let fullScriptText = "";
     let previousChunk = "";
@@ -305,7 +329,8 @@ export const generateScript = async (
       const endScene = Math.min(startScene + Math.floor(approxScenes / numChunks) - 1, approxScenes);
       const chunkScenes = shortScript.slice(startScene - 1, endScene);
 
-      const chunkPrompt = `${basePrompt}
+      let chunkText = "";
+      let chunkPrompt = `${basePrompt}
       Using this outline:
       Logline: ${outlineParsed.logline}
       Synopsis: ${outlineParsed.synopsis}
@@ -320,20 +345,25 @@ export const generateScript = async (
       Output JSON with:
       - chunkText: The screenplay text for this chunk
       `;
-      let chunkResult;
       let attempts = 0;
-      do {
-        chunkResult = await callOpenAI(chunkPrompt, { temperature: 0.1, max_tokens: 16384 });  // Lower temp for strict adherence
-        const chunkParsed = JSON.parse(chunkResult);
-        const chunkLength = Math.round(chunkParsed.chunkText.split("\n").length / 55);  // Updated to 55 lines/page for accuracy
-        console.log(`Chunk ${chunk} attempt ${attempts + 1}: Generated ${chunkLength} pages`);
-        if (chunkLength >= pagesPerChunk * 0.8) {
-          fullScriptText += chunkParsed.chunkText + "\n\n";
-          previousChunk = chunkParsed.chunkText;
-          break;
-        }
+      let finishReason = "max_tokens";
+      while (finishReason === "max_tokens" || (Math.round(chunkText.split("\n").length / 55) < pagesPerChunk * 0.8 && attempts < 5)) {
+        const { content: chunkContent, finish_reason } = await callOpenAI(chunkPrompt, { temperature: 0.1, max_tokens: 32768 });
+        finishReason = finish_reason;
+        const chunkParsed = JSON.parse(chunkContent);
+        chunkText += chunkParsed.chunkText;
+        chunkPrompt = `${basePrompt}
+        Previous partial chunk (continue seamlessly from where it left off without repeating): ${chunkText}
+        
+        Continue generating the screenplay text to complete the chunk for scenes ${startScene} to ${endScene}, adding more details to reach the full length.
+        Output JSON with:
+        - chunkText: The continuation text
+        `;
         attempts++;
-      } while (attempts < 5);  // Increased retries
+        console.log(`Chunk ${chunk} attempt ${attempts}: Generated ${Math.round(chunkText.split("\n").length / 55)} pages so far`);
+      }
+      fullScriptText += chunkText + "\n\n";
+      previousChunk = chunkText;
     }
 
     return {
@@ -357,8 +387,8 @@ export const generateScript = async (
     - actSummaries: Array of ${numActs} objects with {act: number, summary: 200-300 word act summary}
     - themes: Array of 3-5 themes
     `;
-    const highLevelResult = await callOpenAI(highLevelPrompt, { max_tokens: 16384 });
-    outlineParsed = JSON.parse(highLevelResult);
+    const { content: highLevelContent } = await callOpenAI(highLevelPrompt, { max_tokens: 32768 });
+    outlineParsed = JSON.parse(highLevelContent);
 
     for (let act = 1; act <= numActs; act++) {
       const actPrompt = `${basePrompt}
@@ -371,13 +401,13 @@ export const generateScript = async (
       Output JSON with:
       - actShortScript: Array of scene objects with {act: ${act}, sceneNumber: number, heading: "INT/EXT. LOCATION - TIME", summary: 100-200 word action/dialogue summary}
       `;
-      const actResult = await callOpenAI(actPrompt, { max_tokens: 16384 });
-      const actParsed = JSON.parse(actResult);
+      const { content: actContent } = await callOpenAI(actPrompt, { max_tokens: 32768 });
+      const actParsed = JSON.parse(actContent);
       shortScript = shortScript.concat(actParsed.actShortScript);
     }
 
     // Now generate script chunks
-    const pagesPerChunk = 40;
+    const pagesPerChunk = 80;
     const numChunks = Math.ceil(approxPages / pagesPerChunk);
     let fullScriptText = "";
     let previousChunk = "";
@@ -387,7 +417,8 @@ export const generateScript = async (
       const endScene = Math.min(startScene + Math.floor(approxScenes / numChunks) - 1, approxScenes);
       const chunkScenes = shortScript.slice(startScene - 1, endScene);
 
-      const chunkPrompt = `${basePrompt}
+      let chunkText = "";
+      let chunkPrompt = `${basePrompt}
       Using this outline:
       Logline: ${outlineParsed.logline}
       Synopsis: ${outlineParsed.synopsis}
@@ -402,20 +433,25 @@ export const generateScript = async (
       Output JSON with:
       - chunkText: The screenplay text for this chunk
       `;
-      let chunkResult;
       let attempts = 0;
-      do {
-        chunkResult = await callOpenAI(chunkPrompt, { temperature: 0.1, max_tokens: 16384 });
-        const chunkParsed = JSON.parse(chunkResult);
-        const chunkLength = Math.round(chunkParsed.chunkText.split("\n").length / 55);
-        console.log(`Chunk ${chunk} attempt ${attempts + 1}: Generated ${chunkLength} pages`);
-        if (chunkLength >= pagesPerChunk * 0.8) {
-          fullScriptText += chunkParsed.chunkText + "\n\n";
-          previousChunk = chunkParsed.chunkText;
-          break;
-        }
+      let finishReason = "max_tokens";
+      while (finishReason === "max_tokens" || (Math.round(chunkText.split("\n").length / 55) < pagesPerChunk * 0.8 && attempts < 5)) {
+        const { content: chunkContent, finish_reason } = await callOpenAI(chunkPrompt, { temperature: 0.1, max_tokens: 32768 });
+        finishReason = finish_reason;
+        const chunkParsed = JSON.parse(chunkContent);
+        chunkText += chunkParsed.chunkText;
+        chunkPrompt = `${basePrompt}
+        Previous partial chunk (continue seamlessly from where it left off without repeating): ${chunkText}
+        
+        Continue generating the screenplay text to complete the chunk for scenes ${startScene} to ${endScene}, adding more details to reach the full length.
+        Output JSON with:
+        - chunkText: The continuation text
+        `;
         attempts++;
-      } while (attempts < 5);
+        console.log(`Chunk ${chunk} attempt ${attempts}: Generated ${Math.round(chunkText.split("\n").length / 55)} pages so far`);
+      }
+      fullScriptText += chunkText + "\n\n";
+      previousChunk = chunkText;
     }
 
     return {
@@ -449,14 +485,14 @@ For each character, include:
 Return a JSON object with key "characters" containing the array.
 `;
 
-  const result = await callOpenAI(prompt, { temperature: 0.5 });
+  const { content } = await callOpenAI(prompt, { temperature: 0.5 });
 
   let characters: any[] = [];
   try {
-    const parsed = JSON.parse(result);
+    const parsed = JSON.parse(content);
     characters = parsed.characters || [];
   } catch (e) {
-    console.error("Failed to parse characters JSON:", e, result);
+    console.error("Failed to parse characters JSON:", e, content);
     characters = [];
   }
 
@@ -512,14 +548,14 @@ Specifications:
 Return JSON with key "storyboard" containing array of main frames, each with coverageShots array.
 `;
 
-  const result = await callOpenAI(prompt, { temperature: 0.6 });
+  const { content } = await callOpenAI(prompt, { temperature: 0.6 });
 
   let storyboard: StoryboardFrame[] = [];
   try {
-    const parsed = JSON.parse(result);
+    const parsed = JSON.parse(content);
     storyboard = parsed.storyboard || [];
   } catch (e) {
-    console.error("Failed to parse storyboard JSON:", e, result);
+    console.error("Failed to parse storyboard JSON:", e, content);
     storyboard = [];
   }
 
@@ -538,16 +574,16 @@ Generate a visual concept including:
 Return the JSON object directly.
 `;
 
-  const result = await callOpenAI(prompt, { temperature: 0.7 });
+  const { content } = await callOpenAI(prompt, { temperature: 0.7 });
 
   let concept = {};
   let visualReferences = [];
   try {
-    const parsed = JSON.parse(result);
+    const parsed = JSON.parse(content);
     concept = parsed.concept || {};
     visualReferences = parsed.visualReferences || [];
   } catch (e) {
-    console.error("Failed to parse concept JSON:", e, result);
+    console.error("Failed to parse concept JSON:", e, content);
   }
 
   return { concept, visualReferences };
@@ -579,13 +615,13 @@ For each category:
 Return JSON with key "categories" containing the array.
 `;
 
-  const result = await callOpenAI(prompt, { temperature: 0.4 });
+  const { content } = await callOpenAI(prompt, { temperature: 0.4 });
 
   let parsed;
   try {
-    parsed = JSON.parse(result);
+    parsed = JSON.parse(content);
   } catch (e) {
-    console.error("Failed to parse budget JSON:", e, result);
+    console.error("Failed to parse budget JSON:", e, content);
     parsed = { categories: [] };
   }
 
@@ -610,14 +646,14 @@ For each day, include:
 Return a JSON object with key "schedule" containing the array.
 `;
 
-  const result = await callOpenAI(prompt, { temperature: 0.5 });
+  const { content } = await callOpenAI(prompt, { temperature: 0.5 });
 
   let schedule = [];
   try {
-    const parsed = JSON.parse(result);
+    const parsed = JSON.parse(content);
     schedule = parsed.schedule || [];
   } catch (e) {
-    console.error("Failed to parse schedule JSON:", e, result);
+    console.error("Failed to parse schedule JSON:", e, content);
     schedule = [];
   }
 
@@ -666,14 +702,14 @@ RULES:
 Return a JSON object with key "locations" containing the array of location objects.
 `;
 
-  const result = await callOpenAI(prompt, { temperature: 0.5 });
+  const { content } = await callOpenAI(prompt, { temperature: 0.5 });
 
   let locations: any[] = [];
   try {
-    const parsed = JSON.parse(result);
+    const parsed = JSON.parse(content);
     locations = parsed.locations || [];
   } catch (e) {
-    console.error("Failed to parse locations JSON:", e, result);
+    console.error("Failed to parse locations JSON:", e, content);
     locations = [];
   }
 
@@ -702,11 +738,11 @@ Ensure assets align with the script's scenes and tone.
 Return a JSON object with key "soundAssets" containing the array of sound asset objects.
 `;
 
-  const result = await callOpenAI(prompt, { temperature: 0.5 });
+  const { content } = await callOpenAI(prompt, { temperature: 0.5 });
 
   let soundAssets: any[] = [];
   try {
-    const parsed = JSON.parse(result);
+    const parsed = JSON.parse(content);
     soundAssets = parsed.soundAssets || [];
     const minDuration = duration >= 60 ? "00:30" : "00:10";
     soundAssets = soundAssets.map((asset) => {
@@ -720,7 +756,7 @@ Return a JSON object with key "soundAssets" containing the array of sound asset 
       };
     });
   } catch (e) {
-    console.error("Failed to parse sound assets JSON:", e, result);
+    console.error("Failed to parse sound assets JSON:", e, content);
     soundAssets = [];
   }
 
