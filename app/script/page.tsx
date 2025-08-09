@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FileText, Save, Download, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -21,6 +21,12 @@ export default function ScriptPage() {
   const [script, setScript] = useState<string>(resolveScript(filmPackage?.script));
   const [loading, setLoading] = useState(false);
   const [serverStats, setServerStats] = useState<ServerStats>({});
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Keep editor in sync if store updates elsewhere (e.g., different tab regenerates)
+  useEffect(() => {
+    setScript(resolveScript(filmPackage?.script));
+  }, [filmPackage?.script]);
 
   function resolveScript(value: unknown): string {
     if (typeof value === "string") return value;
@@ -69,11 +75,16 @@ export default function ScriptPage() {
       return;
     }
 
+    // Cancel any previous request
+    if (abortRef.current) abortRef.current.abort();
+    abortRef.current = new AbortController();
+
     setLoading(true);
     setServerStats({});
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
+        cache: "no-store",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           movieIdea: filmPackage.idea,
@@ -81,6 +92,7 @@ export default function ScriptPage() {
           scriptLength: filmPackage.length || "5 min",
           provider: "openai",
         }),
+        signal: abortRef.current.signal,
       });
 
       // Read as text first, then try JSON (prevents "Unexpected token" crashes)
@@ -127,9 +139,13 @@ export default function ScriptPage() {
       }
 
       alert("Script generated successfully!");
-    } catch (error) {
-      console.error("Failed to generate script:", error);
-      alert("Failed to generate script. Please try again.");
+    } catch (error: any) {
+      if (error?.name === "AbortError") {
+        console.warn("Generate script aborted");
+      } else {
+        console.error("Failed to generate script:", error);
+        alert("Failed to generate script. Please try again.");
+      }
     } finally {
       setLoading(false);
     }
@@ -178,6 +194,7 @@ export default function ScriptPage() {
                 <Button
                   onClick={handleGenerateScript}
                   disabled={loading}
+                  aria-busy={loading}
                   className="bg-[#FF6A00] hover:bg-[#E55A00] text-white"
                 >
                   {loading ? "Generating..." : "Generate Script"}
@@ -207,7 +224,7 @@ export default function ScriptPage() {
               <h1 className="text-3xl font-bold text-white mb-2">Script Editor</h1>
               <p className="text-[#B2C8C9]">Professional screenplay writing</p>
               <p className="text-[#B2C8C9] text-sm mt-1">
-                Target: {targetMinutes} minutes • Current: ~{shownPages} pages
+                Target: {targetMinutes} minutes (~{targetMinutes} pages) • Current: ~{shownPages} pages
               </p>
             </div>
             <div className="flex items-center space-x-3 mt-4 md:mt-0">
