@@ -9,10 +9,14 @@ import { useFilmStore } from "@/lib/store";
 
 export default function ScriptPage() {
   const { filmPackage, updateFilmPackage } = useFilmStore();
-  const [script, setScript] = useState<string>(
-    resolveScript(filmPackage?.script)
-  );
+  const [script, setScript] = useState<string>(resolveScript(filmPackage?.script));
   const [loading, setLoading] = useState(false);
+  const [serverStats, setServerStats] = useState<{
+    estimatedPages?: number;
+    targetMinutes?: number;
+    sceneCount?: number;
+    characterCount?: number;
+  }>({});
 
   function resolveScript(value: any): string {
     if (typeof value === "string") return value;
@@ -28,6 +32,32 @@ export default function ScriptPage() {
     return "";
   }
 
+  const parseDurationToMinutes = (raw?: string): number => {
+    if (!raw) return 5;
+    const s = String(raw).trim().toLowerCase();
+    if (s.includes("feature")) return 100;
+    if (s.includes("short")) return 10;
+
+    const hr = s.match(/(\d+)\s*(h|hr|hour|hours)\b/);
+    if (hr) {
+      const h = parseInt(hr[1], 10);
+      if (!isNaN(h)) return Math.max(1, h * 60);
+    }
+    const min = s.match(/(\d+)\s*(m|min|mins|minute|minutes)?\b/);
+    if (min) {
+      const m = parseInt(min[1], 10);
+      if (!isNaN(m)) return Math.max(1, m);
+    }
+    return 5;
+  };
+
+  const wordsPerPage = 220;
+  const estimatePagesByWords = (text?: string) => {
+    if (typeof text !== "string" || !text.trim()) return 0;
+    const words = text.trim().split(/\s+/).filter(Boolean).length;
+    return Math.max(1, Math.round(words / wordsPerPage));
+  };
+
   const handleSave = () => {
     updateFilmPackage({ script });
     alert("Script saved successfully!");
@@ -40,14 +70,13 @@ export default function ScriptPage() {
     }
 
     setLoading(true);
+    setServerStats({});
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          step: "generate-script",
+          // step intentionally omitted; default branch generates the script
           movieIdea: filmPackage.idea,
           movieGenre: filmPackage.genre,
           scriptLength: filmPackage.length || "5 min",
@@ -56,7 +85,7 @@ export default function ScriptPage() {
       });
 
       if (!res.ok) {
-        const errorData = await res.json();
+        const errorData = await res.json().catch(() => ({}));
         console.error("API error:", errorData.error);
         alert(errorData.error || "Failed to generate script.");
         return;
@@ -64,17 +93,35 @@ export default function ScriptPage() {
 
       const data = await res.json();
 
-      // ✅ Get the new professional script text
-      const safeScript = resolveScript(data.scriptText);
-
+      const safeScript = resolveScript(data.scriptText ?? data.script);
       setScript(safeScript);
 
+      // Save into global store
       updateFilmPackage({
         script: safeScript,
         logline: data.logline,
         synopsis: data.synopsis,
         shortScript: data.shortScript || [],
+        themes: data.themes || [],
       });
+
+      // Pull stats if backend provided them
+      if (data.stats) {
+        setServerStats({
+          estimatedPages: data.stats.estimatedPages,
+          targetMinutes: data.stats.targetMinutes,
+          sceneCount: data.stats.sceneCount,
+          characterCount: data.stats.characterCount,
+        });
+      } else {
+        // Fallback: local estimate
+        setServerStats({
+          estimatedPages: estimatePagesByWords(safeScript),
+          targetMinutes: parseDurationToMinutes(filmPackage.length),
+          sceneCount: countScenes(safeScript),
+          characterCount: countCharacters(safeScript),
+        });
+      }
 
       alert("Script generated successfully!");
     } catch (error) {
@@ -87,29 +134,27 @@ export default function ScriptPage() {
 
   const countScenes = (text?: string): number => {
     if (typeof text !== "string") return 0;
-    return (
-      (text.split("EXT.").length - 1) +
-      (text.split("INT.").length - 1)
-    );
+    return (text.match(/^(?:INT\.|EXT\.|INT\/EXT\.|EXT\/INT\.)/gmi) || []).length;
   };
 
   const countCharacters = (text?: string): number => {
     if (typeof text !== "string") return 0;
+    // Heuristic: single uppercase lines that aren't scene headings and not too long
     return text
       .split("\n")
-      .filter(
-        (line) =>
-          line.trim() &&
-          line === line.toUpperCase() &&
-          !line.startsWith("INT.") &&
-          !line.startsWith("EXT.")
-      ).length;
+      .filter((line) => {
+        const t = line.trim();
+        if (!t) return false;
+        if (/^(?:INT\.|EXT\.|INT\/EXT\.|EXT\/INT\.)/.test(t)) return false;
+        // character cue lines are usually short & uppercase (avoid ACTION lines)
+        return t === t.toUpperCase() && t.length <= 30;
+      }).length;
   };
 
-  const pageCount =
-    typeof script === "string" ? Math.round(script.split("\n").length / 55) : 0;
-
-  const estRuntime = `${pageCount} min`;
+  const localPageCount = estimatePagesByWords(script);
+  const targetMinutes = serverStats.targetMinutes ?? parseDurationToMinutes(filmPackage?.length);
+  const shownPages = serverStats.estimatedPages ?? localPageCount;
+  const estRuntime = `${shownPages} min`;
 
   if (!script) {
     return (
@@ -170,6 +215,10 @@ export default function ScriptPage() {
               <p className="text-[#B2C8C9]">
                 Professional screenplay writing
               </p>
+              {/* Target vs. current estimate */}
+              <p className="text-[#B2C8C9] text-sm mt-1">
+                Target: {targetMinutes} pages • Current: ~{shownPages} pages
+              </p>
             </div>
             <div className="flex items-center space-x-3 mt-4 md:mt-0">
               <Button
@@ -228,19 +277,19 @@ export default function ScriptPage() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
             <Card className="glass-effect border-[#FF6A00]/20 p-4 text-center">
               <div className="text-2xl font-bold text-[#FF6A00]">
-                {pageCount}
+                {shownPages}
               </div>
-              <div className="text-sm text-[#B2C8C9]">Pages</div>
+              <div className="text-sm text-[#B2C8C9]">Pages (est.)</div>
             </Card>
             <Card className="glass-effect border-[#FF6A00]/20 p-4 text-center">
               <div className="text-2xl font-bold text-[#FF6A00]">
-                {countScenes(script)}
+                {serverStats.sceneCount ?? countScenes(script)}
               </div>
               <div className="text-sm text-[#B2C8C9]">Scenes</div>
             </Card>
             <Card className="glass-effect border-[#FF6A00]/20 p-4 text-center">
               <div className="text-2xl font-bold text-[#FF6A00]">
-                {countCharacters(script)}
+                {serverStats.characterCount ?? countCharacters(script)}
               </div>
               <div className="text-sm text-[#B2C8C9]">Characters</div>
             </Card>
