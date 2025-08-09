@@ -14,39 +14,36 @@ import {
 
 export const dynamic = "force-dynamic";
 
-/** Robust duration parser:
+/** Parse flexible duration strings:
  *  "120", "120 min", "120m", "2h", "2 hours", "feature" (-> 100), "short" (-> 10)
  */
 function parseDurationToMinutes(raw: string | undefined): number {
   if (!raw) return 5;
   const s = String(raw).trim().toLowerCase();
 
-  // common aliases
-  if (s.includes("feature")) return 100; // safer default; the generator will still target minutes=pages
+  if (s.includes("feature")) return 100;
   if (s.includes("short")) return 10;
 
-  // explicit minutes like "120", "120m", "120 min", "90min"
-  const minMatch = s.match(/(\d+)\s*(m|min|mins|minute|minutes)?\b/);
-  // hours like "2h", "2 hour", "2 hours"
   const hrMatch = s.match(/(\d+)\s*(h|hr|hour|hours)\b/);
-
   if (hrMatch) {
     const h = parseInt(hrMatch[1], 10);
     if (!isNaN(h)) return Math.max(1, h * 60);
   }
+
+  const minMatch = s.match(/(\d+)\s*(m|min|mins|minute|minutes)?\b/);
   if (minMatch) {
     const m = parseInt(minMatch[1], 10);
     if (!isNaN(m)) return Math.max(1, m);
   }
 
-  // fallbacks for common labels
-  if (s.includes("1")) return 1;
-  if (s.includes("5")) return 5;
-  if (s.includes("10")) return 10;
-  if (s.includes("15")) return 15;
-  if (s.includes("30")) return 30;
-  if (s.includes("60")) return 60;
+  // Very loose fallback on common numerals
   if (s.includes("120")) return 120;
+  if (s.includes("60")) return 60;
+  if (s.includes("30")) return 30;
+  if (s.includes("15")) return 15;
+  if (s.includes("10")) return 10;
+  if (s.includes("5")) return 5;
+  if (s.includes("1")) return 1;
 
   return 5;
 }
@@ -58,7 +55,7 @@ function estimatePagesByWords(text: string, wordsPerPage = 220): number {
 
 function countScenes(text: string): number {
   // Fountain-ish scene headings
-  return (text.match(/^(?:INT\.|EXT\.|INT\/EXT\.|EXT\/INT\.)/gmi) || []).length;
+  return (text.match(/^(?:INT\.|EXT\.|INT\/EXT\.|EXT\/INT\.)/gim) || []).length;
 }
 
 async function generateScriptData(
@@ -66,37 +63,34 @@ async function generateScriptData(
   movieGenre: string,
   scriptLength: string
 ) {
-  // Parse and normalize the duration instead of forcing a fixed whitelist
   const minutes = parseDurationToMinutes(scriptLength);
   const normalizedLength = `${minutes} min`;
 
   console.log("Generating script data with:", {
-    movieIdea,
+    movieIdea: !!movieIdea,
     movieGenre,
     requestedLength: scriptLength,
     normalizedLength,
   });
 
-  const {
-    logline,
-    synopsis,
-    scriptText,
-    shortScript,
-    themes,
-  } = await generateScript(movieIdea, movieGenre, normalizedLength);
+  const { logline, synopsis, scriptText, shortScript, themes } = await generateScript(
+    movieIdea,
+    movieGenre,
+    normalizedLength
+  );
 
-  // Characters from generated script (best results after script exists)
+  // Characters (better after script exists)
   let characters: Character[] = [];
   try {
     const charactersResult = await generateCharacters(scriptText, movieGenre);
     characters = charactersResult.characters || [];
     console.log(`Generated ${characters.length} characters`);
-  } catch (error) {
-    console.error("Failed to generate characters:", error);
+  } catch (err) {
+    console.error("Failed to generate characters:", err);
   }
 
-  // Improved stats
-  const estPages = estimatePagesByWords(scriptText, 220); // ~1 page/min
+  // Stats
+  const estPages = estimatePagesByWords(scriptText, 220);
   const sceneCount = countScenes(scriptText);
   console.log("Script stats:", {
     estPages,
@@ -125,6 +119,11 @@ export async function POST(request: NextRequest) {
   let body: any = {};
   try {
     body = await request.json();
+  } catch {
+    // keep body as {} and fall through — downstream validations will catch it
+  }
+
+  try {
     const {
       movieIdea,
       movieGenre,
@@ -133,7 +132,7 @@ export async function POST(request: NextRequest) {
       script,
       scriptContent,
       characters,
-    } = body;
+    } = body || {};
 
     console.log("Received request:", {
       movieIdea: !!movieIdea,
@@ -147,7 +146,9 @@ export async function POST(request: NextRequest) {
 
     if (
       !movieIdea &&
-      !["storyboard", "schedule", "locations", "sound", "characters"].includes(step)
+      !["storyboard", "schedule", "locations", "sound", "characters", "concept", "budget"].includes(
+        step
+      )
     ) {
       return NextResponse.json(
         { error: "Movie idea and genre are required for script generation." },
@@ -163,8 +164,8 @@ export async function POST(request: NextRequest) {
             { status: 400 }
           );
         }
-        const charactersResult = await generateCharacters(scriptContent, movieGenre);
-        return NextResponse.json(charactersResult);
+        const result = await generateCharacters(scriptContent, movieGenre || "");
+        return NextResponse.json(result);
       }
 
       case "concept": {
@@ -181,9 +182,7 @@ export async function POST(request: NextRequest) {
       case "storyboard": {
         if (!movieIdea || !movieGenre || !scriptLength) {
           return NextResponse.json(
-            {
-              error: "movieIdea, movieGenre, and scriptLength are required for storyboard.",
-            },
+            { error: "movieIdea, movieGenre, and scriptLength are required for storyboard." },
             { status: 400 }
           );
         }
@@ -193,7 +192,7 @@ export async function POST(request: NextRequest) {
           movieGenre,
           script: script || "",
           scriptLength,
-          characters: characters || [],
+          characters: (characters as Character[]) || [],
         });
 
         return NextResponse.json({
@@ -275,7 +274,9 @@ export async function POST(request: NextRequest) {
       default: {
         if (!movieIdea || !movieGenre || !scriptLength) {
           return NextResponse.json(
-            { error: "movieIdea, movieGenre, and scriptLength are required for script generation." },
+            {
+              error: "movieIdea, movieGenre, and scriptLength are required for script generation.",
+            },
             { status: 400 }
           );
         }
@@ -293,7 +294,7 @@ export async function POST(request: NextRequest) {
           shortScript: scriptResult.shortScript,
           themes: scriptResult.themes,
           characters: scriptResult.characters,
-          stats: scriptResult.stats, // <-- expose stats to UI
+          stats: scriptResult.stats,
         });
       }
     }
