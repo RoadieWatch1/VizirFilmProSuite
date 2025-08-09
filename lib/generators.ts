@@ -269,6 +269,126 @@ function safeParse<T = any>(raw: string, tag = "json"): T | null {
   }
 }
 
+// ---------- Robust Outline helper ----------
+
+type OutlineResult = {
+  logline: string;
+  synopsis: string;
+  themes: string[];
+  shortScript: ShortScriptItem[];
+};
+
+async function getRobustOutline(params: {
+  idea: string;
+  genre: string;
+  targetPages: number;
+  approxScenes: number;
+  synopsisLength: string;
+}): Promise<OutlineResult> {
+  const { idea, genre, targetPages, approxScenes, synopsisLength } = params;
+
+  // keep outlines compact to avoid truncation
+  const SCENE_CAP = Math.min(approxScenes, 70);
+
+  const base = `
+Generate a compact but production-ready film outline for a ${genre} feature based on this idea:
+${idea}
+
+Rules:
+- 1 page ≈ 1 minute; target length ≈ ${targetPages} pages
+- Output STRICT JSON only. No markdown. No commentary.
+- Keep each scene summary to 80–120 words.
+- Use only these keys at top level: logline, synopsis, themes, shortScript
+- shortScript MUST be an array of exactly ${SCENE_CAP} scenes.
+- Each scene object MUST have: { "act": number, "sceneNumber": number, "heading": "INT/EXT. LOCATION - DAY/NIGHT", "summary": "..." }
+- Do NOT include any other keys.
+`;
+
+  // Attempt A — single-pass compact outline
+  const promptA = `${base}
+Output JSON:
+{
+  "logline": "1 sentence",
+  "synopsis": "${synopsisLength}",
+  "themes": ["3-5 thematic words/phrases"],
+  "shortScript": [
+    { "act": 1, "sceneNumber": 1, "heading": "INT. ... - DAY", "summary": "..." }
+    // ... exactly ${SCENE_CAP} items
+  ]
+}
+`;
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const { content } = await callOpenAI(promptA, {
+      temperature: 0.5,
+      max_tokens: 2200,
+    });
+    const parsed = safeParse<OutlineResult>(content, `outline-A#${attempt}`);
+    if (parsed?.shortScript?.length) return parsed;
+  }
+
+  // Attempt B — two-step: acts -> scenes
+  const actPrompt = `
+Create STRICT JSON with only:
+{
+  "logline": "1 sentence",
+  "synopsis": "${synopsisLength}",
+  "themes": ["3-5"],
+  "acts": [
+    { "act": 1, "summary": "200 words" },
+    { "act": 2, "summary": "200 words" },
+    { "act": 3, "summary": "200 words" }
+  ]
+}
+Idea: ${idea}
+Genre: ${genre}
+Target pages: ${targetPages}
+`;
+
+  const actRes = await callOpenAI(actPrompt, { temperature: 0.5, max_tokens: 1600 });
+  const actsParsed = safeParse<{ logline: string; synopsis: string; themes: string[]; acts: { act: number; summary: string }[] }>(
+    actRes.content,
+    "outline-acts"
+  );
+
+  if (actsParsed?.acts?.length) {
+    const scenePrompt = `
+Using these act summaries, output STRICT JSON with only:
+{
+  "shortScript": [
+    { "act": 1, "sceneNumber": 1, "heading": "INT. ... - DAY", "summary": "80-120 words" }
+    // ... exactly ${SCENE_CAP} items across acts
+  ]
+}
+${JSON.stringify(actsParsed, null, 2)}
+`;
+    const sceneRes = await callOpenAI(scenePrompt, { temperature: 0.4, max_tokens: 2200 });
+    const sceneParsed = safeParse<{ shortScript: ShortScriptItem[] }>(sceneRes.content, "outline-scenes");
+    if (sceneParsed?.shortScript?.length) {
+      return {
+        logline: actsParsed.logline || "",
+        synopsis: actsParsed.synopsis || "",
+        themes: actsParsed.themes || [],
+        shortScript: sceneParsed.shortScript,
+      };
+    }
+  }
+
+  // Attempt C — minimal fallback so generation can proceed
+  const minimal: OutlineResult = {
+    logline: "",
+    synopsis: "",
+    themes: [],
+    shortScript: Array.from({ length: Math.max(12, Math.min(40, SCENE_CAP)) }, (_, i) => ({
+      act: i < 4 ? 1 : i < 8 ? 2 : 3,
+      sceneNumber: i + 1,
+      heading: i % 2 === 0 ? "INT. LOCATION - DAY" : "EXT. LOCATION - NIGHT",
+      summary: "To be expanded during writing. Maintain continuity and escalate stakes."
+    })),
+  };
+  return minimal;
+}
+
 // ---------- GENERATORS ----------
 
 export const generateScript = async (
@@ -372,21 +492,14 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
   }
 
   // ---------- Medium/Long scripts: outline as JSON, writing as text chunks ----------
-  // Step 1: Outline
-  const outlinePrompt = `${basePrompt}
-First, create a detailed outline.
-Output JSON with:
-- logline: 1-sentence summary
-- synopsis: ${synopsisLength} synopsis
-- shortScript: Array of detailed scene objects (exactly ${approxScenes} scenes) with {act: number, sceneNumber: number, heading: "INT/EXT. LOCATION - TIME", summary: 100-200 word action/dialogue summary}
-- themes: Array of 3-5 themes
-`;
-  const { content: outlineContent } = await callOpenAI(outlinePrompt, { temperature: 0.6, max_tokens: 4096 });
-  const outlineParsed = safeParse<{ logline: string; synopsis: string; themes: string[]; shortScript: ShortScriptItem[] }>(
-    outlineContent,
-    "outline"
-  );
-  if (!outlineParsed) throw new Error("Outline JSON parse failed");
+  // Step 1: Robust Outline (with retries & fallbacks)
+  const outlineParsed = await getRobustOutline({
+    idea,
+    genre,
+    targetPages,
+    approxScenes,
+    synopsisLength,
+  });
   const shortScript: ShortScriptItem[] = outlineParsed.shortScript || [];
 
   // Step 2: Chunk writing loop (plain text Fountain)
