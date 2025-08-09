@@ -241,10 +241,9 @@ export interface ShortScriptItem {
   dialogue?: string;
 }
 
-// ---------- Utility for page estimation ----------
+// ---------- Utility ----------
 
 function estimatePagesFromText(text: string, wordsPerPage = 220) {
-  // Simple, robust page estimate
   const words = text.trim().split(/\s+/).filter(Boolean).length;
   return Math.max(1, Math.round(words / wordsPerPage));
 }
@@ -252,6 +251,22 @@ function estimatePagesFromText(text: string, wordsPerPage = 220) {
 function tail(text: string, maxChars = 4000) {
   if (!text) return "";
   return text.length > maxChars ? text.slice(-maxChars) : text;
+}
+
+function safeParse<T = any>(raw: string, tag = "json"): T | null {
+  try {
+    return JSON.parse(raw) as T;
+  } catch (e) {
+    const i = raw.indexOf("{");
+    const j = raw.lastIndexOf("}");
+    if (i >= 0 && j > i) {
+      try {
+        return JSON.parse(raw.slice(i, j + 1)) as T;
+      } catch {}
+    }
+    console.error(`safeParse failed [${tag}] len=${raw?.length}`, e);
+    return null;
+  }
 }
 
 // ---------- GENERATORS ----------
@@ -307,7 +322,6 @@ export const generateScript = async (
     synopsisLength = "500 words";
   }
 
-  // ---------- Short scripts: single call (JSON) ----------
   const basePrompt = `
 Generate a professional screenplay for a ${genre} film based on this idea:
 ${idea}
@@ -324,23 +338,36 @@ Specifications:
 - Style: Use a highly verbose, detailed writing style. Expand action lines with environmental detail, emotions, and sensory specifics. Extend dialogue with subtext and natural back-and-forth. Do not summarize.
 `;
 
+  // ---------- Short scripts (<= 15 min): meta JSON + plain-text script ----------
   if (duration <= 15) {
-    const prompt = `${basePrompt}
-Output JSON with:
-- logline: 1-sentence summary
-- synopsis: ${synopsisLength} synopsis
-- scriptText: Full screenplay text (aim for ${targetPages} pages)
-- shortScript: Array of objects with {scene: heading, description: action summary, dialogue: key lines}
+    // A) compact JSON meta (no big script inside JSON)
+    const metaPrompt = `${basePrompt}
+Output JSON with ONLY:
+- logline
+- synopsis: ${synopsisLength}
 - themes: Array of 3-5 themes
+- shortScript: Array of scene objects with {scene, description, dialogue}
 `;
-    const { content } = await callOpenAI(prompt, { temperature: 0.7, max_tokens: 4096 });
-    const parsed = JSON.parse(content);
+    const { content: metaJson } = await callOpenAI(metaPrompt, { temperature: 0.6, max_tokens: 2000 });
+    const meta = safeParse(metaJson, "short-meta") ?? { logline: "", synopsis: "", themes: [], shortScript: [] };
+
+    // B) write screenplay as plain text (Fountain)
+    const writePrompt = `
+Write a screenplay in Fountain format of ~${targetPages} pages (1 page ≈ 220 words).
+Use this idea/genre and remain consistent with the meta below.
+Output screenplay text ONLY. No JSON. No commentary.
+
+=== META ===
+${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, themes: meta.themes }, null, 2)}
+`;
+    const { content: scriptText } = await callOpenAIText(writePrompt, { temperature: 0.8, max_tokens: 3500 });
+
     return {
-      logline: parsed.logline,
-      synopsis: parsed.synopsis,
-      scriptText: parsed.scriptText,
-      shortScript: parsed.shortScript,
-      themes: parsed.themes,
+      logline: meta.logline,
+      synopsis: meta.synopsis,
+      scriptText: scriptText.trim(),
+      shortScript: meta.shortScript || [],
+      themes: meta.themes || [],
     };
   }
 
@@ -355,8 +382,12 @@ Output JSON with:
 - themes: Array of 3-5 themes
 `;
   const { content: outlineContent } = await callOpenAI(outlinePrompt, { temperature: 0.6, max_tokens: 4096 });
-  const outlineParsed = JSON.parse(outlineContent);
-  const shortScript: ShortScriptItem[] = outlineParsed.shortScript;
+  const outlineParsed = safeParse<{ logline: string; synopsis: string; themes: string[]; shortScript: ShortScriptItem[] }>(
+    outlineContent,
+    "outline"
+  );
+  if (!outlineParsed) throw new Error("Outline JSON parse failed");
+  const shortScript: ShortScriptItem[] = outlineParsed.shortScript || [];
 
   // Step 2: Chunk writing loop (plain text Fountain)
   const wordsPerPage = 220;
@@ -369,22 +400,14 @@ Output JSON with:
   let previousChunkTail = "";
 
   while (pageEstimate < targetPages - 3 && chunkIndex < numChunks + 5) {
-    const startScene = Math.floor((chunkIndex) * (approxScenes / numChunks)) + 1;
-    const endScene = Math.min(
-      Math.floor((chunkIndex + 1) * (approxScenes / numChunks)),
-      approxScenes
-    );
+    const startScene = Math.floor(chunkIndex * (approxScenes / numChunks)) + 1;
+    const endScene = Math.min(Math.floor((chunkIndex + 1) * (approxScenes / numChunks)), approxScenes);
     const chunkScenes = shortScript.slice(startScene - 1, endScene);
 
     const guidance = `
 === GLOBAL OUTLINE (for guidance only) ===
 ${JSON.stringify(
-  {
-    logline: outlineParsed.logline,
-    synopsis: outlineParsed.synopsis,
-    themes: outlineParsed.themes,
-    scenes: chunkScenes,
-  },
+  { logline: outlineParsed.logline, synopsis: outlineParsed.synopsis, themes: outlineParsed.themes, scenes: chunkScenes },
   null,
   2
 )}
@@ -405,7 +428,7 @@ ${guidance}
 `;
 
     // First attempt for this chunk
-    let { content: chunkText, finish_reason } = await callOpenAIText(continuationPrompt, {
+    let { content: chunkText } = await callOpenAIText(continuationPrompt, {
       temperature: 0.8,
       max_tokens: 3500,
     });
@@ -487,12 +510,11 @@ Return a JSON object with key "characters" containing the array.
 
   const { content } = await callOpenAI(prompt, { temperature: 0.5 });
   let characters: any[] = [];
-  try {
-    const parsed = JSON.parse(content);
-    characters = parsed.characters || [];
-  } catch (e) {
-    console.error("Failed to parse characters JSON:", e, content);
-    characters = [];
+  const parsed = safeParse<{ characters: any[] }>(content, "characters");
+  if (parsed?.characters) {
+    characters = parsed.characters;
+  } else {
+    console.error("Failed to parse characters JSON:", content?.slice(0, 400));
   }
 
   return { characters };
@@ -550,14 +572,10 @@ Return JSON with key "storyboard" containing array of main frames, each with cov
 `;
 
   const { content } = await callOpenAI(prompt, { temperature: 0.6 });
+  const parsed = safeParse<{ storyboard: StoryboardFrame[] }>(content, "storyboard");
   let storyboard: StoryboardFrame[] = [];
-  try {
-    const parsed = JSON.parse(content);
-    storyboard = parsed.storyboard || [];
-  } catch (e) {
-    console.error("Failed to parse storyboard JSON:", e, content);
-    storyboard = [];
-  }
+  if (parsed?.storyboard) storyboard = parsed.storyboard;
+  else console.error("Failed to parse storyboard JSON:", content?.slice(0, 400));
 
   return storyboard;
 };
@@ -577,17 +595,11 @@ Return the JSON object directly.
 `;
 
   const { content } = await callOpenAI(prompt, { temperature: 0.7 });
-  let concept = {};
-  let visualReferences: any[] = [];
-  try {
-    const parsed = JSON.parse(content);
-    concept = parsed.concept || {};
-    visualReferences = parsed.visualReferences || [];
-  } catch (e) {
-    console.error("Failed to parse concept JSON:", e, content);
-  }
-
-  return { concept, visualReferences };
+  const parsed = safeParse<{ concept: any; visualReferences: any[] }>(content, "concept");
+  return {
+    concept: parsed?.concept || {},
+    visualReferences: parsed?.visualReferences || [],
+  };
 };
 
 // ---------- Budget ----------
@@ -624,13 +636,7 @@ Return JSON with key "categories" containing the array.
 `;
 
   const { content } = await callOpenAI(prompt, { temperature: 0.4 });
-  let parsed;
-  try {
-    parsed = JSON.parse(content);
-  } catch (e) {
-    console.error("Failed to parse budget JSON:", e, content);
-    parsed = { categories: [] };
-  }
+  const parsed = safeParse(content, "budget") || { categories: [] };
   return parsed;
 };
 
@@ -653,15 +659,8 @@ Return a JSON object with key "schedule" containing the array.
 `;
 
   const { content } = await callOpenAI(prompt, { temperature: 0.5 });
-  let schedule: any[] = [];
-  try {
-    const parsed = JSON.parse(content);
-    schedule = parsed.schedule || [];
-  } catch (e) {
-    console.error("Failed to parse schedule JSON:", e, content);
-    schedule = [];
-  }
-  return { schedule };
+  const parsed = safeParse<{ schedule: any[] }>(content, "schedule");
+  return { schedule: parsed?.schedule || [] };
 };
 
 // ---------- Locations ----------
@@ -707,15 +706,8 @@ Return a JSON object with key "locations" containing the array of location objec
 `;
 
   const { content } = await callOpenAI(prompt, { temperature: 0.5 });
-  let locations: any[] = [];
-  try {
-    const parsed = JSON.parse(content);
-    locations = parsed.locations || [];
-  } catch (e) {
-    console.error("Failed to parse locations JSON:", e, content);
-    locations = [];
-  }
-  return { locations };
+  const parsed = safeParse<{ locations: any[] }>(content, "locations");
+  return { locations: parsed?.locations || [] };
 };
 
 // ---------- Sound Assets ----------
@@ -741,21 +733,16 @@ Return a JSON object with key "soundAssets" containing the array of sound asset 
 `;
 
   const { content } = await callOpenAI(prompt, { temperature: 0.5 });
-  let soundAssets: any[] = [];
-  try {
-    const parsed = JSON.parse(content);
-    soundAssets = parsed.soundAssets || [];
-    const minDuration = duration >= 60 ? "00:30" : "00:10";
-    soundAssets = soundAssets.map((asset) => {
-      const [mins, secs] = (asset.duration || "00:10").split(":").map(Number);
-      const totalSecs = (mins || 0) * 60 + (secs || 0);
-      const adjustedDuration = totalSecs >= 10 ? asset.duration : minDuration;
-      return { ...asset, duration: adjustedDuration, audioUrl: "" };
-    });
-  } catch (e) {
-    console.error("Failed to parse sound assets JSON:", e, content);
-    soundAssets = [];
-  }
+  const parsed = safeParse<{ soundAssets: any[] }>(content, "soundAssets");
+  let soundAssets: any[] = parsed?.soundAssets || [];
+
+  const minDuration = duration >= 60 ? "00:30" : "00:10";
+  soundAssets = soundAssets.map((asset) => {
+    const [mins, secs] = (asset.duration || "00:10").split(":").map((n: string) => parseInt(n, 10) || 0);
+    const totalSecs = (mins || 0) * 60 + (secs || 0);
+    const adjustedDuration = totalSecs >= 10 ? asset.duration : minDuration;
+    return { ...asset, duration: adjustedDuration, audioUrl: "" };
+  });
 
   return { soundAssets };
 };
