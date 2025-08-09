@@ -7,26 +7,26 @@ import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { useFilmStore } from "@/lib/store";
 
+type ServerStats = {
+  estimatedPages?: number;
+  targetMinutes?: number;
+  sceneCount?: number;
+  characterCount?: number;
+};
+
+type ScriptLine = string | { line?: string };
+
 export default function ScriptPage() {
   const { filmPackage, updateFilmPackage } = useFilmStore();
   const [script, setScript] = useState<string>(resolveScript(filmPackage?.script));
   const [loading, setLoading] = useState(false);
-  const [serverStats, setServerStats] = useState<{
-    estimatedPages?: number;
-    targetMinutes?: number;
-    sceneCount?: number;
-    characterCount?: number;
-  }>({});
+  const [serverStats, setServerStats] = useState<ServerStats>({});
 
-  function resolveScript(value: any): string {
+  function resolveScript(value: unknown): string {
     if (typeof value === "string") return value;
     if (Array.isArray(value)) {
-      return value
-        .map((line) => {
-          if (typeof line === "string") return line;
-          if (line?.line) return line.line;
-          return "";
-        })
+      return (value as ScriptLine[])
+        .map((line) => (typeof line === "string" ? line : line?.line ?? ""))
         .join("\n");
     }
     return "";
@@ -76,7 +76,6 @@ export default function ScriptPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          // step intentionally omitted; default branch generates the script
           movieIdea: filmPackage.idea,
           movieGenre: filmPackage.genre,
           scriptLength: filmPackage.length || "5 min",
@@ -84,19 +83,25 @@ export default function ScriptPage() {
         }),
       });
 
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        console.error("API error:", errorData.error);
-        alert(errorData.error || "Failed to generate script.");
-        return;
+      // Read as text first, then try JSON (prevents "Unexpected token" crashes)
+      const raw = await res.text();
+      let data: any = {};
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch {
+        data = {};
       }
 
-      const data = await res.json();
+      if (!res.ok) {
+        const message = data?.error || data?.message || raw || "Failed to generate script.";
+        console.error("API error:", message);
+        alert(message);
+        return;
+      }
 
       const safeScript = resolveScript(data.scriptText ?? data.script);
       setScript(safeScript);
 
-      // Save into global store
       updateFilmPackage({
         script: safeScript,
         logline: data.logline,
@@ -105,7 +110,6 @@ export default function ScriptPage() {
         themes: data.themes || [],
       });
 
-      // Pull stats if backend provided them
       if (data.stats) {
         setServerStats({
           estimatedPages: data.stats.estimatedPages,
@@ -114,7 +118,6 @@ export default function ScriptPage() {
           characterCount: data.stats.characterCount,
         });
       } else {
-        // Fallback: local estimate
         setServerStats({
           estimatedPages: estimatePagesByWords(safeScript),
           targetMinutes: parseDurationToMinutes(filmPackage.length),
@@ -134,19 +137,18 @@ export default function ScriptPage() {
 
   const countScenes = (text?: string): number => {
     if (typeof text !== "string") return 0;
-    return (text.match(/^(?:INT\.|EXT\.|INT\/EXT\.|EXT\/INT\.)/gmi) || []).length;
+    return (text.match(/^(?:INT\.|EXT\.|INT\/EXT\.|EXT\/INT\.)/gim) || []).length;
   };
 
   const countCharacters = (text?: string): number => {
     if (typeof text !== "string") return 0;
-    // Heuristic: single uppercase lines that aren't scene headings and not too long
+    // Heuristic: uppercase lines that aren't scene headings and not too long
     return text
       .split("\n")
       .filter((line) => {
         const t = line.trim();
         if (!t) return false;
         if (/^(?:INT\.|EXT\.|INT\/EXT\.|EXT\/INT\.)/.test(t)) return false;
-        // character cue lines are usually short & uppercase (avoid ACTION lines)
         return t === t.toUpperCase() && t.length <= 30;
       }).length;
   };
@@ -163,21 +165,14 @@ export default function ScriptPage() {
           <div className="max-w-4xl mx-auto">
             <div className="text-center mb-8">
               <FileText className="w-16 h-16 text-[#FF6A00] mx-auto mb-4" />
-              <h1 className="text-3xl font-bold text-white mb-2">
-                Script Editor
-              </h1>
-              <p className="text-[#B2C8C9]">
-                Generate or write your screenplay
-              </p>
+              <h1 className="text-3xl font-bold text-white mb-2">Script Editor</h1>
+              <p className="text-[#B2C8C9]">Generate or write your screenplay</p>
             </div>
 
             <Card className="glass-effect border-[#FF6A00]/20 p-8 text-center">
-              <h3 className="text-xl font-semibold text-white mb-4">
-                No Script Yet
-              </h3>
+              <h3 className="text-xl font-semibold text-white mb-4">No Script Yet</h3>
               <p className="text-[#B2C8C9] mb-6">
-                Generate a script from your film idea or start writing from
-                scratch
+                Generate a script from your film idea or start writing from scratch
               </p>
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <Button
@@ -209,15 +204,10 @@ export default function ScriptPage() {
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-8">
             <div>
-              <h1 className="text-3xl font-bold text-white mb-2">
-                Script Editor
-              </h1>
-              <p className="text-[#B2C8C9]">
-                Professional screenplay writing
-              </p>
-              {/* Target vs. current estimate */}
+              <h1 className="text-3xl font-bold text-white mb-2">Script Editor</h1>
+              <p className="text-[#B2C8C9]">Professional screenplay writing</p>
               <p className="text-[#B2C8C9] text-sm mt-1">
-                Target: {targetMinutes} pages • Current: ~{shownPages} pages
+                Target: {targetMinutes} minutes • Current: ~{shownPages} pages
               </p>
             </div>
             <div className="flex items-center space-x-3 mt-4 md:mt-0">
@@ -276,9 +266,7 @@ export default function ScriptPage() {
           {/* Script Statistics */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
             <Card className="glass-effect border-[#FF6A00]/20 p-4 text-center">
-              <div className="text-2xl font-bold text-[#FF6A00]">
-                {shownPages}
-              </div>
+              <div className="text-2xl font-bold text-[#FF6A00]">{shownPages}</div>
               <div className="text-sm text-[#B2C8C9]">Pages (est.)</div>
             </Card>
             <Card className="glass-effect border-[#FF6A00]/20 p-4 text-center">
@@ -294,9 +282,7 @@ export default function ScriptPage() {
               <div className="text-sm text-[#B2C8C9]">Characters</div>
             </Card>
             <Card className="glass-effect border-[#FF6A00]/20 p-4 text-center">
-              <div className="text-2xl font-bold text-[#FF6A00]">
-                {estRuntime}
-              </div>
+              <div className="text-2xl font-bold text-[#FF6A00]">{estRuntime}</div>
               <div className="text-sm text-[#B2C8C9]">Est. Runtime</div>
             </Card>
           </div>
