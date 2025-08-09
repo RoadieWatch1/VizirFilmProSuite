@@ -1,4 +1,3 @@
-// C:\Users\vizir\VizirPro\app\api\generate\route.ts
 import { NextRequest, NextResponse } from "next/server";
 import {
   generateScript,
@@ -15,19 +14,68 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/** Robust duration parser:
+ *  "120", "120 min", "120m", "2h", "2 hours", "feature" (-> 100), "short" (-> 10)
+ */
+function parseDurationToMinutes(raw: string | undefined): number {
+  if (!raw) return 5;
+  const s = String(raw).trim().toLowerCase();
+
+  // common aliases
+  if (s.includes("feature")) return 100; // safer default; the generator will still target minutes=pages
+  if (s.includes("short")) return 10;
+
+  // explicit minutes like "120", "120m", "120 min", "90min"
+  const minMatch = s.match(/(\d+)\s*(m|min|mins|minute|minutes)?\b/);
+  // hours like "2h", "2 hour", "2 hours"
+  const hrMatch = s.match(/(\d+)\s*(h|hr|hour|hours)\b/);
+
+  if (hrMatch) {
+    const h = parseInt(hrMatch[1], 10);
+    if (!isNaN(h)) return Math.max(1, h * 60);
+  }
+  if (minMatch) {
+    const m = parseInt(minMatch[1], 10);
+    if (!isNaN(m)) return Math.max(1, m);
+  }
+
+  // fallbacks for common labels
+  if (s.includes("1")) return 1;
+  if (s.includes("5")) return 5;
+  if (s.includes("10")) return 10;
+  if (s.includes("15")) return 15;
+  if (s.includes("30")) return 30;
+  if (s.includes("60")) return 60;
+  if (s.includes("120")) return 120;
+
+  return 5;
+}
+
+function estimatePagesByWords(text: string, wordsPerPage = 220): number {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.round(words / wordsPerPage));
+}
+
+function countScenes(text: string): number {
+  // Fountain-ish scene headings
+  return (text.match(/^(?:INT\.|EXT\.|INT\/EXT\.|EXT\/INT\.)/gmi) || []).length;
+}
+
 async function generateScriptData(
   movieIdea: string,
   movieGenre: string,
   scriptLength: string
 ) {
-  // Validate scriptLength
-  const validDurations = ["1 min", "5 min", "10 min", "15 min", "30 min", "60 min", "120 min"];
-  if (!validDurations.includes(scriptLength)) {
-    console.warn(`Invalid scriptLength: ${scriptLength}. Defaulting to 5 min.`);
-    scriptLength = "5 min";
-  }
+  // Parse and normalize the duration instead of forcing a fixed whitelist
+  const minutes = parseDurationToMinutes(scriptLength);
+  const normalizedLength = `${minutes} min`;
 
-  console.log("Generating script data with:", { movieIdea, movieGenre, scriptLength });
+  console.log("Generating script data with:", {
+    movieIdea,
+    movieGenre,
+    requestedLength: scriptLength,
+    normalizedLength,
+  });
 
   const {
     logline,
@@ -35,9 +83,9 @@ async function generateScriptData(
     scriptText,
     shortScript,
     themes,
-  } = await generateScript(movieIdea, movieGenre, scriptLength);
+  } = await generateScript(movieIdea, movieGenre, normalizedLength);
 
-  // Generate characters based on the script
+  // Characters from generated script (best results after script exists)
   let characters: Character[] = [];
   try {
     const charactersResult = await generateCharacters(scriptText, movieGenre);
@@ -47,24 +95,34 @@ async function generateScriptData(
     console.error("Failed to generate characters:", error);
   }
 
-  // Estimate page count and scene count for logging
-  const estPages = Math.round(scriptText.split("\n").length / 40);
-  const sceneCount = (scriptText.match(/^(INT\.|EXT\.)/gm) || []).length;
-  console.log("Script stats:", { estPages, sceneCount, characterCount: characters.length });
+  // Improved stats
+  const estPages = estimatePagesByWords(scriptText, 220); // ~1 page/min
+  const sceneCount = countScenes(scriptText);
+  console.log("Script stats:", {
+    estPages,
+    targetMinutes: minutes,
+    sceneCount,
+    characterCount: characters.length,
+  });
 
   return {
     logline,
     synopsis,
-    script: scriptText,
     scriptText,
     shortScript,
     themes,
     characters,
+    stats: {
+      estimatedPages: estPages,
+      targetMinutes: minutes,
+      sceneCount,
+      characterCount: characters.length,
+    },
   };
 }
 
 export async function POST(request: NextRequest) {
-  let body: any = {}; // Declare body outside try block
+  let body: any = {};
   try {
     body = await request.json();
     const {
@@ -77,7 +135,15 @@ export async function POST(request: NextRequest) {
       characters,
     } = body;
 
-    console.log("Received request:", { movieIdea, movieGenre, scriptLength, step });
+    console.log("Received request:", {
+      movieIdea: !!movieIdea,
+      movieGenre,
+      scriptLength,
+      step,
+      hasScript: !!script,
+      hasScriptContent: !!scriptContent,
+      charactersCount: Array.isArray(characters) ? characters.length : 0,
+    });
 
     if (
       !movieIdea &&
@@ -219,13 +285,15 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
           idea: movieIdea,
           genre: movieGenre,
-          length: scriptLength,
+          length: `${parseDurationToMinutes(scriptLength)} min`,
           logline: scriptResult.logline,
           synopsis: scriptResult.synopsis,
-          script: scriptResult.scriptText,
+          script: scriptResult.scriptText, // legacy key
+          scriptText: scriptResult.scriptText,
           shortScript: scriptResult.shortScript,
           themes: scriptResult.themes,
           characters: scriptResult.characters,
+          stats: scriptResult.stats, // <-- expose stats to UI
         });
       }
     }
