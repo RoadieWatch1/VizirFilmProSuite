@@ -14,38 +14,43 @@ import {
 
 export const dynamic = "force-dynamic";
 
+// ✅ Helps avoid timeouts for long/feature generation on serverless
+export const maxDuration = 300;
+
 /** Parse flexible duration strings:
- *  "120", "120 min", "120m", "2h", "2 hours", "feature" (-> 100), "short" (-> 10)
+ *  "120", "120 min", "120m", "2h", "2 hours",
+ *  "60 min (Full Feature)", "120 min (Full Feature)",
+ *  keyword-only fallback: "feature" (-> 120), "short" (-> 10)
  */
 function parseDurationToMinutes(raw: string | undefined): number {
   if (!raw) return 5;
   const s = String(raw).trim().toLowerCase();
 
-  if (s.includes("feature")) return 100;
-  if (s.includes("short")) return 10;
-
+  // Prefer explicit hour formats first: "2h", "2 hours"
   const hrMatch = s.match(/(\d+)\s*(h|hr|hour|hours)\b/);
   if (hrMatch) {
     const h = parseInt(hrMatch[1], 10);
-    if (!isNaN(h)) return Math.max(1, h * 60);
+    if (!isNaN(h)) return clampMinutes(h * 60);
   }
 
-  const minMatch = s.match(/(\d+)\s*(m|min|mins|minute|minutes)?\b/);
-  if (minMatch) {
-    const m = parseInt(minMatch[1], 10);
-    if (!isNaN(m)) return Math.max(1, m);
+  // Prefer explicit numbers next (covers: "120 min (Full Feature)" => 120)
+  const numMatch = s.match(/(\d{1,3})/);
+  if (numMatch) {
+    const m = parseInt(numMatch[1], 10);
+    if (!isNaN(m)) return clampMinutes(m);
   }
 
-  // Very loose fallback on common numerals
-  if (s.includes("120")) return 120;
-  if (s.includes("60")) return 60;
-  if (s.includes("30")) return 30;
-  if (s.includes("15")) return 15;
-  if (s.includes("10")) return 10;
-  if (s.includes("5")) return 5;
-  if (s.includes("1")) return 1;
+  // Keyword-only fallbacks (ONLY if there was no number at all)
+  if (s.includes("feature")) return 120;
+  if (s.includes("short")) return 10;
 
   return 5;
+}
+
+function clampMinutes(mins: number): number {
+  if (!Number.isFinite(mins)) return 5;
+  // Reasonable bounds; adjust if you ever want > 240
+  return Math.max(1, Math.min(240, Math.round(mins)));
 }
 
 function estimatePagesByWords(text: string, wordsPerPage = 220): number {
@@ -70,6 +75,7 @@ async function generateScriptData(
     movieIdea: !!movieIdea,
     movieGenre,
     requestedLength: scriptLength,
+    parsedMinutes: minutes,
     normalizedLength,
   });
 
@@ -138,6 +144,7 @@ export async function POST(request: NextRequest) {
       movieIdea: !!movieIdea,
       movieGenre,
       scriptLength,
+      parsedMinutes: scriptLength ? parseDurationToMinutes(scriptLength) : null,
       step,
       hasScript: !!script,
       hasScriptContent: !!scriptContent,
@@ -282,11 +289,12 @@ export async function POST(request: NextRequest) {
         }
 
         const scriptResult = await generateScriptData(movieIdea, movieGenre, scriptLength);
+        const minutes = parseDurationToMinutes(scriptLength);
 
         return NextResponse.json({
           idea: movieIdea,
           genre: movieGenre,
-          length: `${parseDurationToMinutes(scriptLength)} min`,
+          length: `${minutes} min`,
           logline: scriptResult.logline,
           synopsis: scriptResult.synopsis,
           script: scriptResult.scriptText, // legacy key

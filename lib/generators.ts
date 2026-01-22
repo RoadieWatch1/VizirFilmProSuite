@@ -269,6 +269,32 @@ function safeParse<T = any>(raw: string, tag = "json"): T | null {
   }
 }
 
+/**
+ * ✅ Robust runtime parsing (fixes "2 hours" -> 2 minutes bug)
+ * Accepts "120 min", "120m", "2h", "2 hours", "feature", etc.
+ */
+function parseLengthToMinutes(raw: string): number {
+  if (!raw) return 5;
+  const s = String(raw).trim().toLowerCase();
+
+  const hrMatch = s.match(/(\d+)\s*(h|hr|hour|hours)\b/);
+  if (hrMatch) {
+    const h = parseInt(hrMatch[1], 10);
+    if (!isNaN(h)) return Math.max(1, h * 60);
+  }
+
+  const numMatch = s.match(/(\d{1,3})/);
+  if (numMatch) {
+    const m = parseInt(numMatch[1], 10);
+    if (!isNaN(m)) return Math.max(1, m);
+  }
+
+  if (s.includes("feature")) return 120;
+  if (s.includes("short")) return 10;
+
+  return 5;
+}
+
 // ---------- Robust Outline helper ----------
 
 type OutlineResult = {
@@ -287,17 +313,24 @@ async function getRobustOutline(params: {
 }): Promise<OutlineResult> {
   const { idea, genre, targetPages, approxScenes, synopsisLength } = params;
 
-  // keep outlines compact to avoid truncation
-  const SCENE_CAP = Math.min(approxScenes, 70);
+  // ✅ Features need more scenes available; also keep a floor so short scripts aren’t too tiny
+  const SCENE_CAP = Math.max(12, Math.min(approxScenes, 120));
+
+  // ✅ Scene-summary size must shrink for features or the JSON outline gets truncated
+  const summaryRule =
+    targetPages >= 90 ? "Keep each scene summary to 12–20 words (1–2 tight sentences)."
+    : targetPages >= 60 ? "Keep each scene summary to 15–25 words (1–2 sentences)."
+    : targetPages >= 30 ? "Keep each scene summary to 25–45 words (2–3 sentences)."
+    : "Keep each scene summary to 50–80 words.";
 
   const base = `
-Generate a compact but production-ready film outline for a ${genre} feature based on this idea:
+Generate a compact but production-ready film outline for a ${genre} film based on this idea:
 ${idea}
 
 Rules:
 - 1 page ≈ 1 minute; target length ≈ ${targetPages} pages
 - Output STRICT JSON only. No markdown. No commentary.
-- Keep each scene summary to 80–120 words.
+- ${summaryRule}
 - Use only these keys at top level: logline, synopsis, themes, shortScript
 - shortScript MUST be an array of exactly ${SCENE_CAP} scenes.
 - Each scene object MUST have: { "act": number, "sceneNumber": number, "heading": "INT/EXT. LOCATION - DAY/NIGHT", "summary": "..." }
@@ -320,14 +353,20 @@ Output JSON:
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     const { content } = await callOpenAI(promptA, {
-      temperature: 0.5,
-      max_tokens: 2200,
+      temperature: 0.45,
+      max_tokens: 3500,
     });
     const parsed = safeParse<OutlineResult>(content, `outline-A#${attempt}`);
-    if (parsed?.shortScript?.length) return parsed;
+    if (parsed?.shortScript?.length === SCENE_CAP) return parsed;
+    if (parsed?.shortScript?.length) {
+      // Accept partial if model under-produced; we’ll still be able to write from it.
+      return parsed;
+    }
   }
 
-  // Attempt B — two-step: acts -> scenes
+  // Attempt B — two-step: acts -> scenes (more reliable for feature-length outlines)
+  const actSummaryWords = targetPages >= 60 ? "120–160 words" : "180–220 words";
+
   const actPrompt = `
 Create STRICT JSON with only:
 {
@@ -335,9 +374,9 @@ Create STRICT JSON with only:
   "synopsis": "${synopsisLength}",
   "themes": ["3-5"],
   "acts": [
-    { "act": 1, "summary": "200 words" },
-    { "act": 2, "summary": "200 words" },
-    { "act": 3, "summary": "200 words" }
+    { "act": 1, "summary": "${actSummaryWords}" },
+    { "act": 2, "summary": "${actSummaryWords}" },
+    { "act": 3, "summary": "${actSummaryWords}" }
   ]
 }
 Idea: ${idea}
@@ -345,24 +384,33 @@ Genre: ${genre}
 Target pages: ${targetPages}
 `;
 
-  const actRes = await callOpenAI(actPrompt, { temperature: 0.5, max_tokens: 1600 });
-  const actsParsed = safeParse<{ logline: string; synopsis: string; themes: string[]; acts: { act: number; summary: string }[] }>(
-    actRes.content,
-    "outline-acts"
-  );
+  const actRes = await callOpenAI(actPrompt, { temperature: 0.45, max_tokens: 2200 });
+  const actsParsed = safeParse<{
+    logline: string;
+    synopsis: string;
+    themes: string[];
+    acts: { act: number; summary: string }[];
+  }>(actRes.content, "outline-acts");
 
   if (actsParsed?.acts?.length) {
     const scenePrompt = `
 Using these act summaries, output STRICT JSON with only:
 {
   "shortScript": [
-    { "act": 1, "sceneNumber": 1, "heading": "INT. ... - DAY", "summary": "80-120 words" }
+    { "act": 1, "sceneNumber": 1, "heading": "INT. ... - DAY", "summary": "..." }
     // ... exactly ${SCENE_CAP} items across acts
   ]
 }
+
+Rules:
+- ${summaryRule}
+- Ensure sceneNumber increments sequentially from 1.
+- Act distribution should feel natural (Act 2 typically longest).
+- No extra keys.
+
 ${JSON.stringify(actsParsed, null, 2)}
 `;
-    const sceneRes = await callOpenAI(scenePrompt, { temperature: 0.4, max_tokens: 2200 });
+    const sceneRes = await callOpenAI(scenePrompt, { temperature: 0.4, max_tokens: 3500 });
     const sceneParsed = safeParse<{ shortScript: ShortScriptItem[] }>(sceneRes.content, "outline-scenes");
     if (sceneParsed?.shortScript?.length) {
       return {
@@ -383,7 +431,7 @@ ${JSON.stringify(actsParsed, null, 2)}
       act: i < 4 ? 1 : i < 8 ? 2 : 3,
       sceneNumber: i + 1,
       heading: i % 2 === 0 ? "INT. LOCATION - DAY" : "EXT. LOCATION - NIGHT",
-      summary: "To be expanded during writing. Maintain continuity and escalate stakes."
+      summary: "To be expanded during writing. Maintain continuity and escalate stakes.",
     })),
   };
   return minimal;
@@ -391,13 +439,11 @@ ${JSON.stringify(actsParsed, null, 2)}
 
 // ---------- GENERATORS ----------
 
-export const generateScript = async (
-  idea: string,
-  genre: string,
-  length: string
-) => {
-  const duration = parseInt(length.replace(/\D/g, ""), 10) || 5; // minutes
+export const generateScript = async (idea: string, genre: string, length: string) => {
+  // ✅ Robust parse (prevents “2 hours” becoming 2 minutes)
+  const duration = parseLengthToMinutes(length);
   const targetPages = duration; // 1 page ≈ 1 minute
+
   const approxScenes = Math.round(duration / 1.2);
   const minScenes = Math.max(3, Math.floor(approxScenes * 0.75));
   const maxScenes = Math.ceil(approxScenes * 1.25);
@@ -431,12 +477,14 @@ export const generateScript = async (
     numCharacters = 4;
     synopsisLength = "300 words";
   } else if (duration <= 60) {
-    structureGuide = "A feature-length script with 40-60 scenes, detailed three-act structure, multiple storylines, deep character development, and thematic complexity.";
+    structureGuide =
+      "A feature-length script with 40-60 scenes, detailed three-act structure, multiple storylines, deep character development, and thematic complexity.";
     numActs = 3;
     numCharacters = 5;
     synopsisLength = "400 words";
   } else {
-    structureGuide = "A full feature film with 80-120 scenes, extended three-act structure, complex subplots, ensemble cast, and thematic depth.";
+    structureGuide =
+      "A full feature film with 80-120 scenes, extended three-act structure, complex subplots, ensemble cast, and thematic depth.";
     numActs = 3;
     numCharacters = 7;
     synopsisLength = "500 words";
@@ -468,19 +516,20 @@ Output JSON with ONLY:
 - themes: Array of 3-5 themes
 - shortScript: Array of scene objects with {scene, description, dialogue}
 `;
-    const { content: metaJson } = await callOpenAI(metaPrompt, { temperature: 0.6, max_tokens: 2000 });
+    const { content: metaJson } = await callOpenAI(metaPrompt, { temperature: 0.6, max_tokens: 2200 });
     const meta = safeParse(metaJson, "short-meta") ?? { logline: "", synopsis: "", themes: [], shortScript: [] };
 
     // B) write screenplay as plain text (Fountain)
     const writePrompt = `
 Write a screenplay in Fountain format of ~${targetPages} pages (1 page ≈ 220 words).
+Start with FADE IN: and include the opening scene heading.
 Use this idea/genre and remain consistent with the meta below.
 Output screenplay text ONLY. No JSON. No commentary.
 
 === META ===
 ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, themes: meta.themes }, null, 2)}
 `;
-    const { content: scriptText } = await callOpenAIText(writePrompt, { temperature: 0.8, max_tokens: 3500 });
+    const { content: scriptText } = await callOpenAIText(writePrompt, { temperature: 0.8, max_tokens: 3800 });
 
     return {
       logline: meta.logline,
@@ -504,7 +553,19 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
 
   // Step 2: Chunk writing loop (plain text Fountain)
   const wordsPerPage = 220;
-  const pagesPerChunk = duration >= 90 ? 7 : 6; // slightly larger chunks for features
+
+  // ✅ Bigger chunks for features => fewer calls => less “stops early”
+  const pagesPerChunk =
+    duration >= 90 ? 10 :
+    duration >= 60 ? 8 :
+    duration >= 30 ? 6 : 5;
+
+  // ✅ Give features more completion budget
+  const chunkMaxTokens =
+    duration >= 90 ? 6500 :
+    duration >= 60 ? 6000 :
+    duration >= 30 ? 4500 : 3500;
+
   const numChunks = Math.ceil(targetPages / pagesPerChunk);
 
   let scriptFountain = "";
@@ -512,13 +573,13 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
   let chunkIndex = 0;
   let previousChunkTail = "";
 
-  while (pageEstimate < targetPages - 3 && chunkIndex < numChunks + 5) {
+  while (pageEstimate < targetPages - 2 && chunkIndex < numChunks + 8) {
     const startScene = Math.floor(chunkIndex * (approxScenes / numChunks)) + 1;
     const endScene = Math.min(Math.floor((chunkIndex + 1) * (approxScenes / numChunks)), approxScenes);
     const chunkScenes = shortScript.slice(startScene - 1, endScene);
 
     const guidance = `
-=== GLOBAL OUTLINE (for guidance only) ===
+=== OUTLINE GUIDANCE (for guidance only) ===
 ${JSON.stringify(
   { logline: outlineParsed.logline, synopsis: outlineParsed.synopsis, themes: outlineParsed.themes, scenes: chunkScenes },
   null,
@@ -526,13 +587,17 @@ ${JSON.stringify(
 )}
 `;
 
+    const isStart = !previousChunkTail;
+
     const continuationPrompt = `
-Write approximately ${pagesPerChunk} pages of screenplay in **Fountain format**, continuing the film.
-1 page ≈ ${wordsPerPage} words. Do NOT summarize. Do NOT output JSON. Output screenplay text ONLY.
+Write approximately ${pagesPerChunk} pages of screenplay in **Fountain format**.
+1 page ≈ ${wordsPerPage} words. Output screenplay text ONLY.
 
-Start at scene ${startScene} and continue through scene ${endScene}, but if those conclude early, continue into the next logical scenes to keep the flow natural.
+${isStart ? `Start from scratch. Include "FADE IN:" and the first scene heading.` : `Continue seamlessly from the prior text.`}
 
-Maintain consistency with character names and events.
+Start at scene ${startScene} and continue through scene ${endScene}, but if those conclude early, continue into the next logical scenes to keep flow natural.
+
+Maintain continuity with character names, timeline, and events. Avoid repeating lines.
 
 RECENT CONTEXT (last lines of the script, if any):
 ${previousChunkTail || "(Script start)"}
@@ -543,22 +608,25 @@ ${guidance}
     // First attempt for this chunk
     let { content: chunkText } = await callOpenAIText(continuationPrompt, {
       temperature: 0.8,
-      max_tokens: 3500,
+      max_tokens: chunkMaxTokens,
     });
 
-    // If we clearly under-shot, iterate a couple of times to top it up
+    // If we clearly under-shot, iterate to top it up
     let localEstimate = estimatePagesFromText(chunkText, wordsPerPage);
     let topUpAttempts = 0;
-    while (localEstimate < Math.max(3, Math.round(pagesPerChunk * 0.8)) && topUpAttempts < 3) {
+    const minChunkPages = Math.max(3, Math.round(pagesPerChunk * 0.8));
+
+    while (localEstimate < minChunkPages && topUpAttempts < 3) {
       const topupPrompt = `
 Continue the screenplay immediately from this exact text (do not repeat lines):
 ---
 ${tail(chunkText, 3500)}
 ---
 
-Write more until this chunk reaches roughly ${pagesPerChunk} pages. No summaries. Fountain format only.
+Write more until this chunk reaches roughly ${pagesPerChunk} pages.
+Fountain format only. No summaries. No commentary.
 `;
-      const top = await callOpenAIText(topupPrompt, { temperature: 0.8, max_tokens: 3500 });
+      const top = await callOpenAIText(topupPrompt, { temperature: 0.8, max_tokens: chunkMaxTokens });
       chunkText += "\n\n" + top.content;
       localEstimate = estimatePagesFromText(chunkText, wordsPerPage);
       topUpAttempts++;
@@ -570,23 +638,38 @@ Write more until this chunk reaches roughly ${pagesPerChunk} pages. No summaries
     previousChunkTail = tail(scriptFountain, 4000);
     chunkIndex++;
 
-    // Safety: stop if we really overshoot by a lot
-    if (pageEstimate > targetPages + 10) break;
+    // Safety: stop if overshoot a lot
+    if (pageEstimate > targetPages + 12) break;
   }
 
-  // Optional expansion pass if we're still short by >5 pages
-  if (pageEstimate < targetPages - 5) {
-    const neededPages = targetPages - pageEstimate;
+  // ✅ Expansion passes if still short (model compression is common on features)
+  let expandGuard = 0;
+  while (pageEstimate < targetPages - 2 && expandGuard < 4) {
+    const neededPages = Math.max(3, targetPages - pageEstimate);
+    const addPages = Math.min(12, neededPages);
+
     const expansionPrompt = `
-Expand the existing screenplay by weaving B-plots, connective tissue between scenes, and richer dialogue beats—without contradicting existing events.
-Write ~${Math.min(10, neededPages)} more pages in Fountain format. No summaries, screenplay text ONLY.
+Expand the existing screenplay by adding:
+- connective scenes that logically bridge beats,
+- richer dialogue beats with subtext,
+- character moments that deepen arcs,
+- small B-plot texture that supports the theme,
+
+WITHOUT contradicting existing events.
+Write ~${addPages} more pages in Fountain format.
+Do not restart. Do not summarize. Output screenplay ONLY.
 
 RECENT CONTEXT:
 ${previousChunkTail}
 `;
-    const expansion = await callOpenAIText(expansionPrompt, { temperature: 0.85, max_tokens: 3500 });
-    scriptFountain += "\n\n" + expansion.content.trim();
+    const expansion = await callOpenAIText(expansionPrompt, { temperature: 0.82, max_tokens: chunkMaxTokens });
+    const addText = (expansion.content || "").trim();
+    if (!addText) break;
+
+    scriptFountain += "\n\n" + addText;
     pageEstimate = estimatePagesFromText(scriptFountain, wordsPerPage);
+    previousChunkTail = tail(scriptFountain, 4000);
+    expandGuard++;
   }
 
   return {
@@ -648,7 +731,7 @@ export const generateStoryboard = async ({
   scriptLength: string;
   characters: Character[];
 }) => {
-  const duration = parseInt(scriptLength.replace(/\D/g, ""), 10) || 5;
+  const duration = parseLengthToMinutes(scriptLength);
   const numFrames = duration <= 5 ? 8 : duration <= 15 ? 15 : duration <= 30 ? 25 : duration <= 60 ? 40 : 80;
   const coveragePerFrame = duration > 15 ? 3 : 2;
 
@@ -718,7 +801,7 @@ Return the JSON object directly.
 // ---------- Budget ----------
 
 export const generateBudget = async (genre: string, length: string) => {
-  const duration = parseInt(length.replace(/\D/g, ""), 10) || 5;
+  const duration = parseLengthToMinutes(length);
   const baseBudget =
     duration <= 5 ? 5000 :
     duration <= 15 ? 15000 :
@@ -826,6 +909,8 @@ Return a JSON object with key "locations" containing the array of location objec
 // ---------- Sound Assets ----------
 
 export const generateSoundAssets = async (script: string, genre: string) => {
+  // NOTE: This was previously guessing duration from script digits. Keeping behavior unchanged for now
+  // since you asked to focus on script generator quality first.
   const duration = parseInt(script.match(/\d+/)?.[0] || "5", 10);
   const numAssets = duration <= 15 ? 5 : duration <= 60 ? 8 : 15;
 
