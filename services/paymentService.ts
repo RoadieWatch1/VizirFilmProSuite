@@ -49,25 +49,33 @@ export const restorePurchases = async (): Promise<void> => {
 };
 
 /**
- * ✅ Start Stripe checkout from web
+ * ✅ Start Stripe checkout from web (NOW sends Firebase token)
  */
-export const startStripeCheckout = async (priceId: string) => {
-  try {
-    const res = await fetch("/api/create-checkout-session", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ priceId }),
-    });
+export const startStripeCheckout = async (priceId: string, token: string) => {
+  if (!priceId) throw new Error("Missing priceId.");
+  if (!token) throw new Error("Missing auth token. Please log in again.");
 
-    const data = await res.json();
+  const res = await fetch("/api/create-checkout-session", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ priceId }),
+    cache: "no-store",
+  });
 
-    if (data?.url) {
-      window.location.href = data.url;
-    } else {
-      alert("Failed to create Stripe checkout session.");
-    }
-  } catch (error) {
-    console.error(error);
-    alert("An error occurred starting Stripe checkout.");
+  const data = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    // show the real backend error
+    throw new Error(data?.error || "Failed to create Stripe checkout session.");
   }
+
+  if (!data?.url) {
+    throw new Error("Checkout created, but no redirect URL was returned.");
+  }
+
+  window.location.href = data.url;
 };
+

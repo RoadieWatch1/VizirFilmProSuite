@@ -1,6 +1,9 @@
+// VizirPro/app/upgrade/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
+import LoginModal from "@/components/LoginModal";
+import { useAuth } from "@/lib/useAuth";
 import {
   startStripeCheckout,
   subscriptionProducts,
@@ -11,8 +14,12 @@ import { Button } from "@/components/ui/button";
 import { Loader2, Crown } from "lucide-react";
 
 export default function UpgradePage() {
+  const { user } = useAuth();
+
   const [plans, setPlans] = useState<SubscriptionProduct[]>([]);
   const [loadingPriceId, setLoadingPriceId] = useState<string | null>(null);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -22,21 +29,42 @@ export default function UpgradePage() {
   }, []);
 
   const handleSubscribe = async (priceId: string) => {
+    setError(null);
     setLoadingPriceId(priceId);
-    await startStripeCheckout(priceId);
-    setLoadingPriceId(null);
+
+    try {
+      // ✅ Must be logged in (we need Firebase token)
+      if (!user) {
+        setShowLoginModal(true);
+        throw new Error("Please log in before purchasing.");
+      }
+
+      const token = await user.getIdToken(true);
+      await startStripeCheckout(priceId, token);
+    } catch (e: any) {
+      console.error("Checkout error:", e);
+      setError(e?.message || "Failed to create Stripe checkout session.");
+      setLoadingPriceId(null);
+    }
   };
 
   return (
     <div className="min-h-screen cinematic-gradient py-12 px-4">
+      <LoginModal isOpen={showLoginModal} onClose={() => setShowLoginModal(false)} />
+
       <div className="max-w-5xl mx-auto">
         <h1 className="text-4xl font-bold text-white text-center mb-6">
           Upgrade to Vizir Pro
         </h1>
-        <p className="text-[#B2C8C9] text-center mb-12 max-w-2xl mx-auto">
-          Unlock longer scripts, advanced features, and priority support for
-          your filmmaking projects.
+        <p className="text-[#B2C8C9] text-center mb-6 max-w-2xl mx-auto">
+          Unlock longer scripts, advanced features, and priority support for your filmmaking projects.
         </p>
+
+        {error && (
+          <div className="max-w-2xl mx-auto mb-8 text-center text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+            {error}
+          </div>
+        )}
 
         {plans.length === 0 ? (
           <div className="text-center text-[#B2C8C9]">
@@ -52,9 +80,7 @@ export default function UpgradePage() {
                 <Card
                   key={plan.identifier}
                   className={`glass-effect p-6 border-[#FF6A00]/20 flex flex-col justify-between transition-all duration-300 hover:-translate-y-1 hover:shadow-xl ${
-                    isLoading
-                      ? "ring-2 ring-[#FF6A00]/50 scale-105"
-                      : ""
+                    isLoading ? "ring-2 ring-[#FF6A00]/50 scale-105" : ""
                   }`}
                 >
                   <div>
@@ -70,10 +96,12 @@ export default function UpgradePage() {
                       {plan.description}
                     </p>
                   </div>
+
                   <div>
                     <p className="text-3xl font-bold text-[#FF6A00] mb-4">
                       {plan.price}
                     </p>
+
                     <Button
                       onClick={() => handleSubscribe(plan.identifier)}
                       className="w-full bg-[#FF6A00] hover:bg-[#E55A00] text-white font-semibold transition-all duration-200"
