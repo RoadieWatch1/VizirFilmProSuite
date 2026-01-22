@@ -5,69 +5,156 @@ import Stripe from "stripe";
 import { initializeApp, cert, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
-// Initialize Stripe
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
-  apiVersion: "2025-06-30.basil",
-});
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-// Your Stripe webhook signing secret
-const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET as string;
+/**
+ * IMPORTANT:
+ * - Do NOT create Stripe client or initialize Firebase Admin at module load time.
+ * - Vercel/Next can evaluate route modules during build, and missing env vars can crash builds.
+ */
 
-// Initialize Firebase Admin (only once)
-if (!getApps().length) {
+function getStripe(): Stripe {
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) throw new Error("Missing STRIPE_SECRET_KEY");
+  return new Stripe(key);
+}
+
+function ensureFirebaseAdmin() {
+  if (getApps().length) return;
+
+  const projectId =
+    process.env.FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const privateKeyRaw = process.env.FIREBASE_PRIVATE_KEY;
+
+  if (!projectId || !clientEmail || !privateKeyRaw) {
+    throw new Error(
+      "Missing Firebase Admin env vars (FIREBASE_PROJECT_ID/NEXT_PUBLIC_FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY)"
+    );
+  }
+
+  const privateKey = privateKeyRaw.replace(/\\n/g, "\n");
+
   initializeApp({
     credential: cert({
-      projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+      projectId,
+      clientEmail,
+      privateKey,
     }),
   });
 }
 
 export async function POST(req: NextRequest) {
-  const rawBody = await req.text();
   const sig = req.headers.get("stripe-signature");
+  if (!sig) {
+    return new NextResponse("Missing stripe-signature header", { status: 400 });
+  }
+
+  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (!endpointSecret) {
+    console.error("❌ Missing STRIPE_WEBHOOK_SECRET");
+    return new NextResponse("Server misconfigured", { status: 500 });
+  }
+
+  let rawBody = "";
+  try {
+    rawBody = await req.text();
+  } catch (err: any) {
+    console.error("❌ Failed to read webhook body:", err?.message || err);
+    return new NextResponse("Invalid body", { status: 400 });
+  }
 
   let event: Stripe.Event;
 
   try {
-    event = stripe.webhooks.constructEvent(rawBody, sig!, endpointSecret);
+    const stripe = getStripe();
+    event = stripe.webhooks.constructEvent(rawBody, sig, endpointSecret);
   } catch (err: any) {
-    console.error("❌ Webhook signature verification failed.", err.message);
+    console.error("❌ Webhook signature verification failed.", err?.message || err);
     return new NextResponse("Webhook Error", { status: 400 });
   }
 
-  const db = getFirestore();
+  try {
+    ensureFirebaseAdmin();
+    const db = getFirestore();
 
-  // ✅ Handle successful payments (both subscriptions and one-time)
-  if (
-    event.type === "checkout.session.completed" ||
-    event.type === "invoice.payment_succeeded"
-  ) {
-    const session = event.data.object as Stripe.Checkout.Session;
+    // ✅ Handle successful payments
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object as Stripe.Checkout.Session;
 
-    const customerId = session.customer as string;
-    const metadata = session.metadata;
+      const metadata = session.metadata || {};
+      const userId = metadata.userId;
 
-    if (!metadata?.userId) {
-      console.warn("⚠️ Missing userId in session metadata.");
-      return NextResponse.json({ received: true });
+      if (!userId) {
+        console.warn("⚠️ checkout.session.completed missing metadata.userId");
+        return NextResponse.json({ received: true }, { status: 200 });
+      }
+
+      const customerId = (session.customer as string) || "";
+      const isSub = session.mode === "subscription";
+
+      await db
+        .collection("users")
+        .doc(userId)
+        .set(
+          {
+            isSubscribed: true,
+            stripeCustomerId: customerId || null,
+            subscriptionType: isSub ? "subscription" : "lifetime",
+            lastUpdated: Date.now(),
+          },
+          { merge: true }
+        );
+
+      console.log(`✅ Marked user ${userId} as subscribed (checkout.session.completed).`);
     }
 
-    const userId = metadata.userId;
+    if (event.type === "invoice.payment_succeeded") {
+      const invoice = event.data.object as Stripe.Invoice;
 
-    await db.collection("users").doc(userId).set(
-      {
-        isSubscribed: true,
-        stripeCustomerId: customerId,
-        subscriptionType: session.mode === "subscription" ? "subscription" : "lifetime",
-        lastUpdated: Date.now(),
-      },
-      { merge: true }
-    );
+      const metadata = invoice.metadata || {};
+      const userId = metadata.userId;
 
-    console.log(`✅ Marked user ${userId} as subscribed.`);
+      if (!userId) {
+        console.warn("⚠️ invoice.payment_succeeded missing metadata.userId");
+        return NextResponse.json({ received: true }, { status: 200 });
+      }
+
+      const customerId = (invoice.customer as string) || "";
+
+      // ✅ Stripe types differ by version; read subscription safely
+      const subscriptionId =
+        typeof (invoice as any).subscription === "string"
+          ? ((invoice as any).subscription as string)
+          : typeof (invoice as any).subscription?.id === "string"
+          ? ((invoice as any).subscription.id as string)
+          : "";
+
+      await db
+        .collection("users")
+        .doc(userId)
+        .set(
+          {
+            isSubscribed: true,
+            stripeCustomerId: customerId || null,
+            stripeSubscriptionId: subscriptionId || null,
+            subscriptionType: "subscription",
+            lastUpdated: Date.now(),
+          },
+          { merge: true }
+        );
+
+      console.log(`✅ Marked user ${userId} as subscribed (invoice.payment_succeeded).`);
+    }
+
+    return NextResponse.json({ received: true }, { status: 200 });
+  } catch (err: any) {
+    console.error("❌ Webhook handler error:", err?.message || err);
+    return new NextResponse("Webhook handler error", { status: 500 });
   }
+}
 
-  return NextResponse.json({ received: true });
+export async function GET() {
+  return NextResponse.json({ ok: true }, { status: 200 });
 }
