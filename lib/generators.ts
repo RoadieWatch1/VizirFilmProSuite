@@ -210,7 +210,8 @@ FORMAT RULES:
 - Action in present tense.
 - CHARACTER names uppercase; dialogue under names.
 - No summaries, no analysis, no JSON, no commentary.
-- Continue seamlessly.
+- Do NOT add meta headers like "PART 1" or "CHUNK 2".
+- Continue seamlessly with proper scene headings.
 `,
       },
       { role: "user", content: prompt },
@@ -415,27 +416,63 @@ function compactBeatsForPrompt(scenes: ShortScriptItem[], maxItems = 24) {
   return lines.join("\n");
 }
 
+/**
+ * ✅ Safer: only removes duplicate FADE IN lines (line-anchored),
+ * so it won't accidentally remove "fade in" in action/dialogue.
+ */
 function stripExtraFadeIn(text: string) {
-  // Find the first FADE IN / FADE IN:
-  const firstMatch = /\bFADE IN:?\b/.exec(text);
-  
-  // If not found, return original
-  if (!firstMatch) return text.trim();
+  const raw = (text || "").replace(/\r\n/g, "\n").trim();
+  if (!raw) return "";
 
-  // If found, keep everything up to the end of the first match
-  const index = firstMatch.index;
-  const length = firstMatch[0].length;
-  const endOfFirst = index + length;
+  const lines = raw.split("\n");
+  const fadeLine = /^\s*FADE IN:?\s*$/i;
 
-  const head = text.slice(0, endOfFirst);
-  // Remove all subsequent occurrences from the rest of the text
-  const tail = text.slice(endOfFirst).replace(/\bFADE IN:?\b/g, "");
+  let firstFound = false;
+  const out: string[] = [];
 
-  return (head + tail).trim();
+  for (const line of lines) {
+    if (fadeLine.test(line)) {
+      if (!firstFound) {
+        firstFound = true;
+        out.push(line.trim().toUpperCase().endsWith(":") ? "FADE IN:" : "FADE IN:");
+      }
+      // skip all subsequent FADE IN lines
+      continue;
+    }
+    out.push(line);
+  }
+
+  return out.join("\n").trim();
 }
 
-// Helper: Stagger requests to avoid 429 Rate Limits
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+// Helper: simple delay
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * ✅ Concurrency-limited mapper (prevents rate spikes; keeps outputs in order)
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array(items.length) as R[];
+  const concurrency = Math.max(1, Math.min(limit, items.length));
+  let next = 0;
+
+  const workers = Array.from({ length: concurrency }, () =>
+    (async () => {
+      while (true) {
+        const idx = next++;
+        if (idx >= items.length) break;
+        results[idx] = await fn(items[idx], idx);
+      }
+    })()
+  );
+
+  await Promise.all(workers);
+  return results;
+}
 
 // ---------- Robust Outline helper ----------
 
@@ -447,13 +484,15 @@ type OutlineResult = {
 };
 
 function computeSceneCap(targetPages: number, approxScenes: number) {
+  // ✅ Keep outlines compact for long scripts so the outline step doesn't become the new bottleneck.
+  // Goal: for 60+ pages, stay ~45–55 scenes (more scenes can be generated in writing).
   let cap = approxScenes;
 
-  if (targetPages >= 110) cap = Math.min(approxScenes, 85);
-  else if (targetPages >= 90) cap = Math.min(approxScenes, 80);
-  else if (targetPages >= 60) cap = Math.min(approxScenes, 70);
-  else if (targetPages >= 30) cap = Math.min(approxScenes, 60);
-  else cap = Math.min(approxScenes, 45);
+  if (targetPages >= 110) cap = Math.min(approxScenes, 65);
+  else if (targetPages >= 90) cap = Math.min(approxScenes, 60);
+  else if (targetPages >= 60) cap = Math.min(approxScenes, 55);
+  else if (targetPages >= 30) cap = Math.min(approxScenes, 50);
+  else cap = Math.min(approxScenes, 40);
 
   return Math.max(12, cap);
 }
@@ -599,13 +638,19 @@ async function getRobustOutline(params: {
 
   const baseSceneCap = computeSceneCap(targetPages, approxScenes);
 
-  // ✅ Force longer, more descriptive summaries to prevent "lazy" scene generation
-  const summaryRule = "Make scene summaries detailed (25-45 words) to guide the writer.";
+  // ✅ For long scripts: keep summaries compact so outline step is fast + reliable.
+  const longForm = targetPages >= 60;
+  const summaryRule = longForm
+    ? "Make scene summaries concrete and compact (12–22 words). Include clear conflict/goal/turn."
+    : "Make scene summaries detailed (25–45 words) to guide the writer.";
+
+  const summaryWordSpec = longForm ? "12–22 words" : "25–45 words";
 
   // ---- Primary path: schema-locked full outline ----
-  for (let attempt = 1; attempt <= 4; attempt++) {
-    const sceneCap = Math.max(12, baseSceneCap - (attempt - 1) * 15);
-    
+  // ✅ Reduce attempts slightly to avoid outline being the bottleneck.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const sceneCap = Math.max(12, baseSceneCap - (attempt - 1) * 8);
+
     const prompt = `
 Generate a detailed film outline for a ${genre} film based on this idea:
 ${idea}
@@ -617,7 +662,7 @@ Rules:
   - act: 1, 2, or 3
   - sceneNumber: sequential starting at 1
   - heading: proper slug line like "INT. LOCATION - DAY"
-  - summary: DETAILED action beat (25-45 words).
+  - summary: action beat (${summaryWordSpec})
 - ${summaryRule}
 - Themes: 3–5 items.
 
@@ -626,8 +671,8 @@ Synopsis length target: ${synopsisLength}
 
     const schema = buildOutlineSchema(sceneCap);
     const res = await callOpenAIJsonSchema<OutlineResult>(prompt, schema, {
-      temperature: 0.35,
-      max_tokens: 4500,
+      temperature: 0.33,
+      max_tokens: 4200,
     });
 
     const parsed = res.data;
@@ -688,14 +733,14 @@ Constraints:
 
   if (actsParsed?.acts?.length === 3) {
     const sceneCap = baseSceneCap;
-    
+
     const scenesPrompt = `
 Using the act summaries below, produce EXACTLY ${sceneCap} shortScript scene beats.
 
 Rules:
 - sceneNumber sequential starting at 1
 - Use proper headings like "INT. ... - DAY"
-- Provide detailed summaries (25-40 words each) for the writer.
+- Provide ${longForm ? "compact" : "detailed"} summaries (${longForm ? "12–22 words" : "25–40 words"}) each.
 - Act 2 is typically longest; distribute scenes realistically.
 
 ACTS_JSON:
@@ -922,7 +967,7 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     };
   }
 
-  // --- PATH B: Feature scripts (Parallel chunk writing) ---
+  // --- PATH B: Feature scripts (Parallel chunk writing, concurrency-capped, retry-safe) ---
 
   // 1) Outline (schema-locked)
   const outlineParsed = await getRobustOutline({
@@ -936,23 +981,25 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
   const shortScript: ShortScriptItem[] = outlineParsed.shortScript || [];
   const effectiveScenes = Math.max(1, shortScript.length || approxScenes);
 
-  // 2) Choose a SAFE number of parallel chunks
-  // We need chunks small enough to be dense, but few enough to fit in limits.
+  // 2) Choose a SAFE number of chunks (more chunks => smaller/faster calls)
+  // ✅ Recommended: ~8 chunks for ~80 pages (≈10 pages/chunk).
   const chunkCount =
-    targetPages <= 45 ? 3 :
-    targetPages <= 70 ? 4 :
-    targetPages <= 95 ? 5 :
-    6;
+    targetPages <= 45 ? 4 :
+    targetPages <= 70 ? 6 :
+    targetPages <= 95 ? 8 :
+    10;
 
-  // ✅ SAFETY CHECK: Ensure we don't have more chunks than scenes
+  // Safety: never more chunks than scenes
   const safeChunkCount = Math.min(chunkCount, effectiveScenes);
   const pagesPerChunk = Math.ceil(targetPages / safeChunkCount);
-  
-  // ✅ WORD COUNT TARGET (Important for forcing length)
-  const targetWords = pagesPerChunk * 250; // 250 words per page to force density
+
+  // ✅ Range target (faster + more reliable than "exactly N words")
+  const minWords = Math.max(900, Math.round(pagesPerChunk * 210));
+  const aimWords = Math.max(minWords, Math.round(pagesPerChunk * 235));
+  const maxWords = Math.max(aimWords + 200, Math.round(pagesPerChunk * 255));
 
   // Tokens needed per chunk (rough estimate)
-  const maxTokensPerChunk = clamp(Math.round(targetWords * 1.5), 5000, 14000);
+  const maxTokensPerChunk = clamp(Math.round(maxWords * 1.35), 4200, 12000);
 
   // 3) Build chunk scene ranges (even distribution)
   const chunkRanges = Array.from({ length: safeChunkCount }, (_, idx) => {
@@ -961,10 +1008,11 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     return { part: idx + 1, startScene, endScene };
   }).filter((r) => r.endScene >= r.startScene);
 
+  const beatsMax = targetPages >= 60 ? 28 : 32;
+
   const chunkInputs = chunkRanges.map((r) => {
     const chunkScenes = shortScript.slice(r.startScene - 1, r.endScene);
-    // We allow more beats here because we *don't* have previousChunkTail in parallel.
-    const beats = compactBeatsForPrompt(chunkScenes, 44);
+    const beats = compactBeatsForPrompt(chunkScenes, beatsMax);
     return { ...r, beats };
   });
 
@@ -977,16 +1025,27 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     chunks: chunkInputs,
   });
 
-  // 5) Parallel generation with STAGGERING to avoid rate limits
-  const chunkPromises = chunkInputs.map(async (chunk, index) => {
-    // ✅ Stagger requests by 1.5s to prevent 429 Too Many Requests
-    await delay(index * 1500);
+  type ChunkGenResult =
+    | { ok: true; content: string }
+    | { ok: false; content: string; error: unknown };
+
+  // Concurrency cap (env override, default 4)
+  const envConc = parseInt(process.env.SCRIPT_CHUNK_CONCURRENCY || "4", 10);
+  const chunkConcurrency = clamp(Number.isFinite(envConc) ? envConc : 4, 1, 6);
+
+  async function generateOneChunk(
+    chunk: { part: number; startScene: number; endScene: number; beats: string },
+    index: number,
+    attempt: number
+  ): Promise<ChunkGenResult> {
+    // Gentle micro-stagger to avoid synchronized bursts even with concurrency
+    await delay((index % chunkConcurrency) * 300);
 
     const isStart = index === 0;
     const plan = plans?.[index];
 
     const chunkPrompt = `
-Write PART ${chunk.part} of ${chunkInputs.length} of a feature screenplay in **Fountain** format.
+Write a continuous portion of a feature screenplay in **Fountain** format.
 
 GLOBAL CONTEXT:
 Genre: ${genre}
@@ -994,15 +1053,17 @@ Logline: ${outlineParsed.logline}
 Synopsis: ${outlineParsed.synopsis}
 Themes: ${(outlineParsed.themes || []).slice(0, 6).join(", ")}
 
-TARGET:
-- Write exactly ${targetWords} words (~${pagesPerChunk} pages).
-- Cover scenes #${chunk.startScene} through #${chunk.endScene}.
-- EXPAND the beats. Do not summarize. Write full dialogue and detailed action.
+SCOPE:
+- This is the portion covering scenes #${chunk.startScene} through #${chunk.endScene}.
+- Length target: Aim for ~${aimWords} words (range ${minWords}–${maxWords}).
+- EXPAND the beats into full scenes with rich dialogue and cinematic action.
+- Do NOT summarize. Write the actual screenplay.
 
 FORMAT RULES:
 - ${isStart ? 'Include "FADE IN:" exactly once at the very start.' : 'Do NOT include "FADE IN:". Start with the first scene heading.'}
 - Use slug lines frequently.
 - Action in present tense.
+- No meta labels like "PART ${chunk.part}".
 
 ${plan ? `CONTINUITY CONSTRAINTS:
 START STATE: ${plan.startState}
@@ -1015,18 +1076,81 @@ BEATS TO EXPAND:
 ${chunk.beats}
 `.trim();
 
-    const { content } = await callOpenAIText(chunkPrompt, {
-      temperature: 0.85, // Creative freedom
-      max_tokens: maxTokensPerChunk,
-    });
+    try {
+      // If retrying, slightly reduce temperature to stabilize output
+      const temp = attempt >= 2 ? 0.78 : 0.85;
 
-    return (content || "").trim();
+      const { content } = await callOpenAIText(chunkPrompt, {
+        temperature: temp,
+        max_tokens: maxTokensPerChunk,
+      });
+
+      const cleaned = (content || "").trim();
+      if (!cleaned) throw new Error("Empty chunk content");
+      return { ok: true, content: cleaned };
+    } catch (error) {
+      return {
+        ok: false,
+        content: "",
+        error,
+      };
+    }
+  }
+
+  // 5) Generate chunks with concurrency cap (no single failure nukes whole run)
+  const firstPass = await mapWithConcurrency(chunkInputs, chunkConcurrency, async (chunk, index) => {
+    return generateOneChunk(chunk, index, 1);
   });
 
-  const generatedChunks = await Promise.all(chunkPromises);
+  // 6) Retry only failed chunks once (allSettled-style resilience)
+  const failedIdx = firstPass
+    .map((r, i) => ({ r, i }))
+    .filter(({ r }) => !r.ok)
+    .map(({ i }) => i);
 
-  // 6) Stitch + sanitize (remove duplicate FADE IN if a later chunk slipped it in)
-  const stitched = generatedChunks.filter(Boolean).join("\n\n");
+  if (failedIdx.length > 0) {
+    // Small backoff before retry wave
+    await delay(900);
+
+    const retryResults = await mapWithConcurrency(
+      failedIdx,
+      Math.max(1, Math.min(2, chunkConcurrency)), // lighter retry concurrency
+      async (idx) => {
+        // Extra backoff per retry index to avoid repeated 429s
+        await delay(idx * 250);
+        return { idx, res: await generateOneChunk(chunkInputs[idx], idx, 2) };
+      }
+    );
+
+    for (const { idx, res } of retryResults) {
+      firstPass[idx] = res;
+    }
+  }
+
+  // 7) Stitch results in order; fill any still-failed chunk with a Fountain boneyard note
+  const stitchedChunks = firstPass.map((r, idx) => {
+    if (r.ok) return r.content;
+
+    const chunk = chunkInputs[idx];
+    const plan = plans?.[idx];
+    const note = `
+/*
+NOTE: This section could not be generated due to a transient error.
+Use the beats below to regenerate PART ${chunk.part} (Scenes ${chunk.startScene}–${chunk.endScene}):
+
+${plan ? `START STATE: ${plan.startState}
+END STATE: ${plan.endState}
+MUST INCLUDE: ${(plan.mustInclude || []).join(", ")}
+MUST AVOID: ${(plan.mustAvoid || []).join(", ")}\n\n` : ""}${chunk.beats}
+*/
+`.trim();
+
+    return note;
+  });
+
+  const stitched = stitchedChunks.filter(Boolean).join("\n\n");
+
+  // 8) Sanitize FADE IN duplication (line-anchored)
   const scriptFountain = stripExtraFadeIn(stitched);
 
   return {
