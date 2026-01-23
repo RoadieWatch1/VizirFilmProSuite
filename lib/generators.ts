@@ -27,9 +27,9 @@ function getOpenAI(): OpenAI {
   return _openai;
 }
 
-// Optional model overrides (keeps defaults if unset)
-const MODEL_TEXT = process.env.OPENAI_MODEL_TEXT || "gpt-4o";
-const MODEL_JSON = process.env.OPENAI_MODEL_JSON || "gpt-4o";
+// ✅ Model defaults (set these in Vercel env vars for Production + Preview)
+const MODEL_TEXT = process.env.OPENAI_MODEL_TEXT || "gpt-5.2"; // screenplay text
+const MODEL_JSON = process.env.OPENAI_MODEL_JSON || "gpt-5.2"; // structured JSON outputs
 
 // ✅ Debug + timeout guards (prevents hidden SDK retries / runaway outline loops)
 const DEBUG_OUTLINE = process.env.DEBUG_OUTLINE === "1";
@@ -45,15 +45,35 @@ type ChatOptions = {
   model?: string;
   temperature?: number;
   max_tokens?: number;
-  // non-breaking extras:
+
+  // Supported OpenAI params (optional)
+  top_p?: number;
+  presence_penalty?: number;
+  frequency_penalty?: number;
+  stop?: string | string[];
+  seed?: number;
+
+  // app-only extras (NEVER forwarded to OpenAI)
   schema_name?: string; // json_schema name
-  request_tag?: string; // used for debug logging
-  timeout_ms?: number; // per-request timeout (OpenAI SDK request option)
+  request_tag?: string; // debug logging tag
+  timeout_ms?: number; // per-request timeout
   max_retries?: number; // overrides SDK retries (default is 2; we want 0 for Vercel safety)
   debug?: boolean; // verbose logs
-  // forward-compatible extras
-  [key: string]: any;
+  force_json_object?: boolean; // force json_object even if schema enabled
 };
+
+function pickCompletionParams(options: ChatOptions) {
+  // Only include keys OpenAI accepts — prevents “unknown param” crashes.
+  const out: any = {};
+  if (typeof options.temperature === "number") out.temperature = options.temperature;
+  if (typeof options.max_tokens === "number") out.max_tokens = options.max_tokens;
+  if (typeof options.top_p === "number") out.top_p = options.top_p;
+  if (typeof options.presence_penalty === "number") out.presence_penalty = options.presence_penalty;
+  if (typeof options.frequency_penalty === "number") out.frequency_penalty = options.frequency_penalty;
+  if (typeof options.seed === "number") out.seed = options.seed;
+  if (typeof options.stop === "string" || Array.isArray(options.stop)) out.stop = options.stop;
+  return out;
+}
 
 function nowMs() {
   return Date.now();
@@ -86,21 +106,105 @@ function extractMsgContent(choice: any): string {
 
 function stripCodeFences(s: string) {
   let t = (s ?? "").trim();
-  if (t.startsWith("```json")) t = t.slice(7).trim();
-  if (t.startsWith("```")) t = t.slice(3).trim();
+  // remove leading ```lang
+  if (t.startsWith("```")) {
+    const firstNewline = t.indexOf("\n");
+    if (firstNewline !== -1) t = t.slice(firstNewline + 1).trim();
+    else t = t.replace(/^```[a-zA-Z0-9_-]*\s*$/, "").trim();
+  }
+  // remove trailing ```
   if (t.endsWith("```")) t = t.slice(0, -3).trim();
   return t;
+}
+
+/** Count unescaped double quotes to detect unterminated strings quickly */
+function hasOddUnescapedQuotes(s: string): boolean {
+  const str = String(s ?? "");
+  let count = 0;
+  let escaped = false;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') count++;
+  }
+  return count % 2 === 1;
+}
+
+/**
+ * Extract the first complete JSON object/array by scanning braces/brackets
+ * while respecting strings. This recovers from extra leading/trailing text.
+ */
+function extractFirstJsonValue(raw: string): string | null {
+  const s = String(raw ?? "");
+  const start = (() => {
+    const iObj = s.indexOf("{");
+    const iArr = s.indexOf("[");
+    if (iObj === -1) return iArr;
+    if (iArr === -1) return iObj;
+    return Math.min(iObj, iArr);
+  })();
+
+  if (start < 0) return null;
+
+  const stack: string[] = [];
+  let inStr = false;
+  let escaped = false;
+
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      if (inStr) escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inStr = !inStr;
+      continue;
+    }
+    if (inStr) continue;
+
+    if (ch === "{" || ch === "[") {
+      stack.push(ch);
+      continue;
+    }
+    if (ch === "}" || ch === "]") {
+      const top = stack[stack.length - 1];
+      if ((ch === "}" && top === "{") || (ch === "]" && top === "[")) {
+        stack.pop();
+        if (stack.length === 0) {
+          return s.slice(start, i + 1).trim();
+        }
+      } else {
+        // mismatched close; bail
+        return null;
+      }
+    }
+  }
+
+  return null;
 }
 
 function looksTruncatedJson(raw: string) {
   const t = (raw ?? "").trim();
   if (!t) return false;
 
-  // If it begins like JSON but doesn't end like JSON, it's likely cut off
+  // Strong signal for unterminated JSON strings
+  if (hasOddUnescapedQuotes(t)) return true;
+
   if (t.startsWith("{") && !t.endsWith("}")) return true;
   if (t.startsWith("[") && !t.endsWith("]")) return true;
 
-  // Heuristic: unbalanced braces
   const opens = (t.match(/{/g) || []).length;
   const closes = (t.match(/}/g) || []).length;
   if (opens > closes) return true;
@@ -112,15 +216,49 @@ function looksTruncatedJson(raw: string) {
   return false;
 }
 
+/**
+ * ✅ safer JSON parse:
+ * - detects likely truncation and returns null (prevents "partial object" mis-parse)
+ * - strips fences
+ * - extracts first complete {...} or [...] value if extra text exists
+ */
+function safeParse<T = any>(raw: string, tag = "json"): T | null {
+  try {
+    const cleaned = stripCodeFences(String(raw ?? ""));
+
+    const candidate = extractFirstJsonValue(cleaned) ?? cleaned;
+
+    if (looksTruncatedJson(candidate)) {
+      console.error(`safeParse failed [${tag}] likely truncated len=${candidate.length}`);
+      return null;
+    }
+
+    return JSON.parse(candidate) as T;
+  } catch (e) {
+    const cleaned = stripCodeFences(String(raw ?? ""));
+    const candidate = extractFirstJsonValue(cleaned);
+    if (candidate && !looksTruncatedJson(candidate)) {
+      try {
+        return JSON.parse(candidate) as T;
+      } catch {
+        // fall through
+      }
+    }
+    console.error(`safeParse failed [${tag}] len=${raw?.length}`, e);
+    return null;
+  }
+}
+
 async function callOpenAI(
   prompt: string,
   options: ChatOptions = {}
 ): Promise<{ content: string; finish_reason: string }> {
-  // JSON-oriented helper (use for outlines, budgets, etc.)
+  // JSON-oriented helper (use for simple JSON calls)
   const openai = getOpenAI();
 
-  const timeout = typeof options.timeout_ms === "number" ? options.timeout_ms : DEFAULT_JSON_CALL_TIMEOUT_MS;
-  const maxRetries = typeof options.max_retries === "number" ? options.max_retries : 0; // ✅ IMPORTANT: avoid hidden retry time on Vercel
+  const timeout =
+    typeof options.timeout_ms === "number" ? options.timeout_ms : DEFAULT_JSON_CALL_TIMEOUT_MS;
+  const maxRetries = typeof options.max_retries === "number" ? options.max_retries : 0;
 
   const completion = await openai.chat.completions.create(
     {
@@ -128,126 +266,13 @@ async function callOpenAI(
       messages: [
         {
           role: "system",
-          content: `
-You are an expert film development AI.
-
-**When generating scripts**, produce JSON like:
-{
-  "logline": "...",
-  "synopsis": "...",
-  "scriptText": "...",
-  "shortScript": [ ... ],
-  "themes": ["...", "..."]
-}
-
-- scriptText must be a professional screenplay in correct screenplay format:
-  • SCENE HEADINGS (e.g. INT. FOREST - DAY)
-  • Action lines in present tense
-  • Character names uppercase and centered
-  • Dialogue indented under character names
-  • No camera directions or lenses
-  • Strictly adhere to specified page, scene, and character counts
-
-**When generating storyboards**, produce JSON like:
-{
-  "storyboard": [
-    {
-      "scene": "...",
-      "shotNumber": "...",
-      "description": "...",
-      "cameraAngle": "...",
-      "cameraMovement": "...",
-      "lens": "...",
-      "lighting": "...",
-      "duration": "...",
-      "dialogue": "...",
-      "soundEffects": "...",
-      "notes": "...",
-      "imagePrompt": "...",
-      "imageUrl": "",
-      "coverageShots": [ ... ]
-    }
-  ]
-}
-
-Always fill imagePrompt with a short visual description. Leave imageUrl empty.
-
-**When generating concepts**, produce:
-{
-  "concept": {
-    "visualStyle": "...",
-    "colorPalette": "...",
-    "cameraTechniques": "...",
-    "lightingApproach": "...",
-    "thematicSymbolism": "...",
-    "productionValues": "..."
-  },
-  "visualReferences": [
-    {
-      "description": "...",
-      "imageUrl": "https://..."
-    }
-  ]
-}
-
-**When generating characters**, produce:
-{
-  "characters": [
-    {
-      "name": "...",
-      "role": "...",
-      "description": "...",
-      "traits": ["...", "..."],
-      "skinColor": "...",
-      "hairColor": "...",
-      "clothingColor": "...",
-      "mood": "...",
-      "visualDescription": "...",
-      "imageUrl": ""
-    }
-  ]
-}
-
-**When generating locations**, produce:
-{
-  "locations": [
-    {
-      "name": "...",
-      "type": "...",
-      "description": "...",
-      "scenes": ["...", "..."],
-      "rating": 4.5,
-      "cost": "$...",
-      "lowBudgetTips": "...",
-      "highBudgetOpportunities": "...",
-      "features": ["...", "..."]
-    }
-  ]
-}
-
-**When generating sound assets**, produce:
-{
-  "soundAssets": [
-    {
-      "name": "...",
-      "type": "...",
-      "duration": "...",
-      "description": "...",
-      "scenes": ["...", "..."],
-      "audioUrl": ""
-    }
-  ]
-}
-
-Always produce valid JSON without extra commentary or markdown (e.g., no \`\`\`json).
-`,
+          content:
+            "You are an expert film development AI. Return ONLY valid JSON. No markdown, no commentary. Avoid using double-quote characters inside string values; rephrase instead.",
         },
         { role: "user", content: prompt },
       ],
-      temperature: options.temperature ?? 0.7,
       response_format: { type: "json_object" },
-      max_tokens: options.max_tokens ?? 4096,
-      ...options,
+      ...pickCompletionParams(options),
     },
     { timeout, maxRetries }
   );
@@ -271,8 +296,9 @@ async function callOpenAIText(
   // Text-only helper (use for screenplay chunks). No JSON formatting pressure.
   const openai = getOpenAI();
 
-  const timeout = typeof options.timeout_ms === "number" ? options.timeout_ms : DEFAULT_TEXT_CALL_TIMEOUT_MS;
-  const maxRetries = typeof options.max_retries === "number" ? options.max_retries : 0; // ✅ IMPORTANT: avoid hidden retry time on Vercel
+  const timeout =
+    typeof options.timeout_ms === "number" ? options.timeout_ms : DEFAULT_TEXT_CALL_TIMEOUT_MS;
+  const maxRetries = typeof options.max_retries === "number" ? options.max_retries : 0;
 
   const completion = await openai.chat.completions.create(
     {
@@ -294,13 +320,15 @@ FORMAT RULES:
 - No summaries, no analysis, no JSON, no commentary.
 - Do NOT add meta headers like "PART 1" or "CHUNK 2".
 - Continue seamlessly with proper scene headings.
-`,
+`.trim(),
         },
         { role: "user", content: prompt },
       ],
-      temperature: options.temperature ?? 0.85, // Higher temp for more creative expansion
-      max_tokens: options.max_tokens ?? 4096,
-      ...options,
+      ...pickCompletionParams({
+        ...options,
+        temperature: typeof options.temperature === "number" ? options.temperature : 0.85,
+        max_tokens: typeof options.max_tokens === "number" ? options.max_tokens : 4096,
+      }),
     },
     { timeout, maxRetries }
   );
@@ -315,9 +343,9 @@ FORMAT RULES:
 }
 
 /**
- * ✅ Structured Outputs helper for schema-locked JSON (used for outlines + chunk plans).
- * - Adds finish_reason/content length logging (DEBUG_OUTLINE).
+ * ✅ Structured Outputs helper for schema-locked JSON.
  * - Treats finish_reason === "length" as failure (prevents parsing truncated JSON).
+ * - Adds extra truncation detection (odd quotes) to prevent "unterminated string" crashes.
  * - Disables SDK retries by default (maxRetries: 0) to avoid Vercel timeout spirals.
  * - Allows forcing json_object mode via OUTLINE_USE_JSON_SCHEMA=0 or options.force_json_object.
  */
@@ -338,7 +366,7 @@ async function callOpenAIJsonSchema<T>(
     {
       role: "system" as const,
       content:
-        "You are an expert film development AI. Return ONLY valid JSON that conforms to the provided schema. No extra keys. No markdown.",
+        "Return ONLY valid JSON that conforms exactly to the provided schema. No extra keys. No markdown. Avoid using double-quote characters inside string values; rephrase instead.",
     },
     { role: "user" as const, content: prompt },
   ];
@@ -350,21 +378,20 @@ async function callOpenAIJsonSchema<T>(
   const timeout =
     typeof options.timeout_ms === "number"
       ? options.timeout_ms
-      : // outline & schema calls should be quicker than text calls
-        (tag.startsWith("outline") ? OUTLINE_CALL_TIMEOUT_MS : DEFAULT_JSON_CALL_TIMEOUT_MS);
+      : tag.startsWith("outline")
+      ? OUTLINE_CALL_TIMEOUT_MS
+      : DEFAULT_JSON_CALL_TIMEOUT_MS;
 
   const maxRetries = typeof options.max_retries === "number" ? options.max_retries : 0;
 
   const wantSchema = OUTLINE_USE_JSON_SCHEMA && options.force_json_object !== true;
 
-  // Try schema mode first (if enabled)
   if (wantSchema) {
     try {
       const completion = await openai.chat.completions.create(
         {
           model: options.model || MODEL_JSON,
           messages,
-          temperature: options.temperature ?? 0.35,
           response_format: {
             type: "json_schema",
             json_schema: {
@@ -373,8 +400,11 @@ async function callOpenAIJsonSchema<T>(
               strict: true,
             },
           },
-          max_tokens: options.max_tokens ?? 4500,
-          ...options,
+          ...pickCompletionParams({
+            ...options,
+            temperature: typeof options.temperature === "number" ? options.temperature : 0.3,
+            max_tokens: typeof options.max_tokens === "number" ? options.max_tokens : 4500,
+          }),
         },
         { timeout, maxRetries }
       );
@@ -394,9 +424,12 @@ async function callOpenAIJsonSchema<T>(
         );
       }
 
-      // ✅ If model hit length, JSON is very likely cut off → treat as failure
+      // Treat odd quotes as truncation too (fixes “Unterminated string in JSON …” cases)
       if (finish === "length" || looksTruncatedJson(content)) {
-        if (debug) console.log(`[${tag}] detected truncation (finish=length or incomplete JSON).`);
+        if (debug)
+          console.log(
+            `[${tag}] detected truncation (finish=length or incomplete JSON/odd quotes).`
+          );
         return { data: null, content: content.trim(), finish_reason: finish, used_schema: true, meta };
       }
 
@@ -410,15 +443,14 @@ async function callOpenAIJsonSchema<T>(
       };
     } catch (err) {
       if (debug) console.log(`[${tag}] schema call threw; falling back to json_object.`, err);
-      // fall through to json_object fallback below
     }
   }
 
   // Fallback: JSON mode
   const { content, finish_reason } = await callOpenAI(prompt, {
     ...options,
-    temperature: options.temperature ?? 0.35,
-    max_tokens: options.max_tokens ?? 4500,
+    temperature: typeof options.temperature === "number" ? options.temperature : 0.3,
+    max_tokens: typeof options.max_tokens === "number" ? options.max_tokens : 4500,
     timeout_ms: timeout,
     max_retries: maxRetries,
   });
@@ -427,9 +459,7 @@ async function callOpenAIJsonSchema<T>(
   const meta = { content_len: content.length, usage: null, finish_reason };
 
   if (debug) {
-    console.log(
-      `[${tag}] used_schema=false finish=${finish_reason} chars=${content.length} usage=n/a`
-    );
+    console.log(`[${tag}] used_schema=false finish=${finish_reason} chars=${content.length} usage=n/a`);
   }
 
   return { data, content, finish_reason, used_schema: false, meta };
@@ -483,48 +513,9 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
-function estimatePagesFromText(text: string, wordsPerPage = 220) {
-  const words = text.trim().split(/\s+/).filter(Boolean).length;
-  return Math.max(1, Math.round(words / wordsPerPage));
-}
-
 function tail(text: string, maxChars = 4000) {
   if (!text) return "";
   return text.length > maxChars ? text.slice(-maxChars) : text;
-}
-
-/**
- * ✅ safer JSON parse:
- * - detects likely truncation and returns null (prevents "partial object" mis-parse)
- * - strips fences
- * - attempts best-effort extraction of largest {...} object
- */
-function safeParse<T = any>(raw: string, tag = "json"): T | null {
-  try {
-    const cleaned = stripCodeFences(String(raw ?? ""));
-
-    // If the content begins as JSON but ends incomplete, treat as truncation
-    if (looksTruncatedJson(cleaned)) {
-      console.error(`safeParse failed [${tag}] likely truncated len=${cleaned.length}`);
-      return null;
-    }
-
-    return JSON.parse(cleaned) as T;
-  } catch (e) {
-    const str = stripCodeFences(String(raw ?? ""));
-    const i = str.indexOf("{");
-    const j = str.lastIndexOf("}");
-    if (i >= 0 && j > i) {
-      const candidate = str.slice(i, j + 1).trim();
-      if (!looksTruncatedJson(candidate)) {
-        try {
-          return JSON.parse(candidate) as T;
-        } catch {}
-      }
-    }
-    console.error(`safeParse failed [${tag}] len=${raw?.length}`, e);
-    return null;
-  }
 }
 
 function parseLengthToMinutes(raw: string): number {
@@ -534,7 +525,6 @@ function parseLengthToMinutes(raw: string): number {
   if (s.includes("feature")) return 120;
   if (s.includes("short")) return 10;
 
-  // HH:MM
   const colon = s.match(/\b(\d{1,2})\s*:\s*(\d{1,2})\b/);
   if (colon) {
     const hh = parseInt(colon[1], 10);
@@ -564,22 +554,6 @@ function parseLengthToMinutes(raw: string): number {
   return 5;
 }
 
-function compactBeatsForPrompt(scenes: ShortScriptItem[], maxItems = 24) {
-  if (!scenes?.length) return "(No beats available for this chunk.)";
-  const slice = scenes.slice(0, maxItems);
-  const lines = slice.map((s) => {
-    const n = typeof s.sceneNumber === "number" ? s.sceneNumber : "";
-    const a = typeof s.act === "number" ? s.act : "";
-    const h = String(s.heading || "").trim();
-    const sum = String(s.summary || "").trim();
-    return `#${n} (Act ${a}) ${h} — ${sum}`;
-  });
-  if (scenes.length > maxItems) {
-    lines.push(`...and ${scenes.length - maxItems} more beats in this chunk.`);
-  }
-  return lines.join("\n");
-}
-
 /**
  * ✅ Safer: only removes duplicate FADE IN lines (line-anchored),
  * so it won't accidentally remove "fade in" in action/dialogue.
@@ -598,9 +572,8 @@ function stripExtraFadeIn(text: string) {
     if (fadeLine.test(line)) {
       if (!firstFound) {
         firstFound = true;
-        out.push(line.trim().toUpperCase().endsWith(":") ? "FADE IN:" : "FADE IN:");
+        out.push("FADE IN:");
       }
-      // skip all subsequent FADE IN lines
       continue;
     }
     out.push(line);
@@ -638,6 +611,323 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
+// ---------- Schemas for all generators (PRO reliability) ----------
+
+function buildShortMetaSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["logline", "synopsis", "themes", "shortScript"],
+    properties: {
+      logline: { type: "string" },
+      synopsis: { type: "string" },
+      themes: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 7 },
+      shortScript: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["scene", "description", "dialogue"],
+          properties: {
+            scene: { type: "string" },
+            description: { type: "string" },
+            dialogue: { type: "string" },
+          },
+        },
+      },
+    },
+  };
+}
+
+function buildCharactersSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["characters"],
+    properties: {
+      characters: {
+        type: "array",
+        minItems: 1,
+        maxItems: 40,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "name",
+            "role",
+            "description",
+            "traits",
+            "skinColor",
+            "hairColor",
+            "clothingColor",
+            "mood",
+            "visualDescription",
+            "imageUrl",
+          ],
+          properties: {
+            name: { type: "string" },
+            role: { type: "string" },
+            description: { type: "string" },
+            traits: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 8 },
+            skinColor: { type: "string" },
+            hairColor: { type: "string" },
+            clothingColor: { type: "string" },
+            mood: { type: "string" },
+            visualDescription: { type: "string" },
+            imageUrl: { type: "string" },
+          },
+        },
+      },
+    },
+  };
+}
+
+function buildStoryboardSchema() {
+  // We normalize counts in code, so schema allows a range.
+  const shotSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["scene", "shotNumber", "description", "imagePrompt", "imageUrl"],
+    properties: {
+      scene: { type: "string" },
+      shotNumber: { type: "string" },
+      description: { type: "string" },
+      cameraAngle: { type: "string" },
+      cameraMovement: { type: "string" },
+      lens: { type: "string" },
+      lighting: { type: "string" },
+      duration: { type: "string" },
+      dialogue: { type: "string" },
+      soundEffects: { type: "string" },
+      notes: { type: "string" },
+      imagePrompt: { type: "string" },
+      imageUrl: { type: "string" },
+      coverageShots: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["scene", "shotNumber", "description", "imagePrompt", "imageUrl"],
+          properties: {
+            scene: { type: "string" },
+            shotNumber: { type: "string" },
+            description: { type: "string" },
+            cameraAngle: { type: "string" },
+            cameraMovement: { type: "string" },
+            lens: { type: "string" },
+            lighting: { type: "string" },
+            duration: { type: "string" },
+            dialogue: { type: "string" },
+            soundEffects: { type: "string" },
+            notes: { type: "string" },
+            imagePrompt: { type: "string" },
+            imageUrl: { type: "string" },
+          },
+        },
+        minItems: 0,
+        maxItems: 6,
+      },
+    },
+  };
+
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["storyboard"],
+    properties: {
+      storyboard: {
+        type: "array",
+        minItems: 1,
+        maxItems: 200,
+        items: shotSchema,
+      },
+    },
+  };
+}
+
+function buildConceptSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["concept", "visualReferences"],
+    properties: {
+      concept: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "visualStyle",
+          "colorPalette",
+          "cameraTechniques",
+          "lightingApproach",
+          "thematicSymbolism",
+          "productionValues",
+        ],
+        properties: {
+          visualStyle: { type: "string" },
+          colorPalette: { type: "string" },
+          cameraTechniques: { type: "string" },
+          lightingApproach: { type: "string" },
+          thematicSymbolism: { type: "string" },
+          productionValues: { type: "string" },
+        },
+      },
+      visualReferences: {
+        type: "array",
+        minItems: 0,
+        maxItems: 8,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["description", "imageUrl"],
+          properties: {
+            description: { type: "string" },
+            imageUrl: { type: "string" },
+          },
+        },
+      },
+    },
+  };
+}
+
+function buildBudgetSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["categories"],
+    properties: {
+      categories: {
+        type: "array",
+        minItems: 3,
+        maxItems: 12,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name", "amount", "percentage", "items", "tips", "alternatives"],
+          properties: {
+            name: { type: "string" },
+            amount: { type: "number" },
+            percentage: { type: "number" },
+            items: {
+              type: "array",
+              minItems: 1,
+              maxItems: 25,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["name", "cost"],
+                properties: {
+                  name: { type: "string" },
+                  cost: { type: "number" },
+                },
+              },
+            },
+            tips: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 12 },
+            alternatives: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 12 },
+          },
+        },
+      },
+    },
+  };
+}
+
+function buildScheduleSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["schedule"],
+    properties: {
+      schedule: {
+        type: "array",
+        minItems: 1,
+        maxItems: 60,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["day", "activities", "duration"],
+          properties: {
+            day: { type: "string" },
+            activities: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 20 },
+            duration: { type: "string" },
+            location: { type: "string" },
+            crew: { type: "array", items: { type: "string" }, minItems: 0, maxItems: 25 },
+          },
+        },
+      },
+    },
+  };
+}
+
+function buildLocationsSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["locations"],
+    properties: {
+      locations: {
+        type: "array",
+        minItems: 1,
+        maxItems: 80,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "name",
+            "type",
+            "description",
+            "mood",
+            "colorPalette",
+            "propsOrFeatures",
+            "scenes",
+            "rating",
+            "lowBudgetTips",
+            "highBudgetOpportunities",
+          ],
+          properties: {
+            name: { type: "string" },
+            type: { type: "string" },
+            description: { type: "string" },
+            mood: { type: "string" },
+            colorPalette: { type: "string" },
+            propsOrFeatures: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 25 },
+            scenes: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 20 },
+            rating: { type: "number", minimum: 1, maximum: 5 },
+            lowBudgetTips: { type: "string" },
+            highBudgetOpportunities: { type: "string" },
+          },
+        },
+      },
+    },
+  };
+}
+
+function buildSoundAssetsSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["soundAssets"],
+    properties: {
+      soundAssets: {
+        type: "array",
+        minItems: 1,
+        maxItems: 40,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name", "type", "duration", "description", "scenes", "audioUrl"],
+          properties: {
+            name: { type: "string" },
+            type: { type: "string" },
+            duration: { type: "string" },
+            description: { type: "string" },
+            scenes: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 30 },
+            audioUrl: { type: "string" },
+          },
+        },
+      },
+    },
+  };
+}
+
 // ---------- Robust Outline helper ----------
 
 type OutlineResult = {
@@ -648,8 +938,6 @@ type OutlineResult = {
 };
 
 function computeSceneCap(targetPages: number, approxScenes: number) {
-  // ✅ Keep outlines compact for long scripts so the outline step doesn't become the new bottleneck.
-  // Goal: for 60+ pages, stay ~45–55 scenes (more scenes can be generated in writing).
   let cap = approxScenes;
 
   if (targetPages >= 110) cap = Math.min(approxScenes, 65);
@@ -754,7 +1042,6 @@ function buildScenesOnlySchema(sceneCap: number) {
 }
 
 function buildActScenesSchema(sceneCount: number) {
-  // Same object shape as ShortScriptItem, but we’ll renumber globally after merging.
   return buildScenesOnlySchema(sceneCount);
 }
 
@@ -785,6 +1072,7 @@ Constraints:
 - Keep the same story content as much as possible.
 - Ensure shortScript has exactly ${sceneCap} items.
 - ${summaryRule}
+- Do NOT use double-quote characters inside any text field values; rephrase instead.
 - Fix escaping, quotes, commas, and remove any extra keys.
 
 Idea: ${idea}
@@ -810,7 +1098,7 @@ ${raw}
 }
 
 /**
- * ✅ NEW: Act-splitting scenes (3 small calls) to prevent huge JSON truncation.
+ * ✅ Act-splitting scenes (3 small calls) to prevent huge JSON truncation.
  * This is now the primary method for features (targetPages >= 45).
  */
 async function getActSplitOutline(params: {
@@ -840,6 +1128,7 @@ Constraints:
 - Act summaries should be ${actSummaryWords}.
 - Themes 3–5 items.
 - Synopsis target length: ${synopsisLength}.
+- Do NOT use double-quote characters inside any text field values; rephrase instead.
 Return JSON with {logline, synopsis, themes, acts:[{act, summary}]}.
 `.trim();
 
@@ -855,14 +1144,12 @@ Return JSON with {logline, synopsis, themes, acts:[{act, summary}]}.
     schema_name: "OutlineActs",
     timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
     max_retries: 0,
-    debug: true, // ✅ log finish_reason/len for confirmation
+    debug: true,
   });
 
   const actsParsed = actsRes.data;
-
   if (!actsParsed?.acts?.length || actsParsed.acts.length !== 3) return null;
 
-  // Scene allocation (keep Act 2 longest, deterministic, sums to sceneCap)
   const act1 = clamp(Math.round(sceneCap * 0.25), 10, Math.max(10, sceneCap - 22));
   const act2 = clamp(Math.round(sceneCap * 0.5), 14, Math.max(14, sceneCap - act1 - 8));
   const act3 = Math.max(8, sceneCap - act1 - act2);
@@ -877,12 +1164,10 @@ Return JSON with {logline, synopsis, themes, acts:[{act, summary}]}.
 
   for (const a of counts) {
     if (timeLeftMs(deadlineMs) < 22_000) {
-      // bail out: keep pipeline alive
       all.push(...makePlaceholderScenes(a.count, a.act));
       continue;
     }
 
-    // Two attempts per act: second attempt is “extreme compact”
     let actScenes: ShortScriptItem[] | null = null;
 
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -900,8 +1185,9 @@ Rules:
   - act: MUST be ${a.act} for every item
   - sceneNumber: sequential starting at 1 (within this act)
   - heading: proper slug line like "INT. LOCATION - DAY" (uppercase)
-  - summary: action beat (${longForm ? "compact" : "detailed"}) 
+  - summary: action beat (${longForm ? "compact" : "detailed"})
 - ${compactRule}
+- Do NOT use double-quote characters inside any text field values; rephrase instead.
 - NO extra keys. NO markdown.
 
 MOVIE IDEA:
@@ -921,7 +1207,7 @@ ${a.summary}
           schema_name: `OutlineAct${a.act}Scenes`,
           timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
           max_retries: 0,
-          debug: true, // ✅ log finish_reason/len for confirmation
+          debug: true,
         }
       );
 
@@ -930,7 +1216,9 @@ ${a.summary}
           ...s,
           act: a.act,
           sceneNumber: idx + 1,
-          heading: String(s.heading || "").trim() || (idx % 2 === 0 ? "INT. LOCATION - DAY" : "EXT. LOCATION - NIGHT"),
+          heading:
+            String(s.heading || "").trim() ||
+            (idx % 2 === 0 ? "INT. LOCATION - DAY" : "EXT. LOCATION - NIGHT"),
           summary: String(s.summary || "").trim() || "To be expanded during writing.",
         }));
         break;
@@ -941,7 +1229,6 @@ ${a.summary}
     all.push(...actScenes);
   }
 
-  // Normalize to exact sceneCap, renumber globally
   const merged = all.slice(0, sceneCap);
   while (merged.length < sceneCap) {
     merged.push(...makePlaceholderScenes(Math.min(3, sceneCap - merged.length), 2));
@@ -975,7 +1262,6 @@ async function getRobustOutline(params: {
 
   const baseSceneCap = computeSceneCap(targetPages, approxScenes);
 
-  // ✅ For long scripts: keep summaries compact so outline step is fast + reliable.
   const longForm = targetPages >= 60;
   const summaryRule = longForm
     ? "Make scene summaries concrete and compact (12–22 words). Include clear conflict/goal/turn."
@@ -983,7 +1269,6 @@ async function getRobustOutline(params: {
 
   const summaryWordSpec = longForm ? "12–22 words" : "25–45 words";
 
-  // ✅ If budget is already tight, bail early with a minimal outline
   if (timeLeftMs(deadline) < 25_000) {
     const fallbackLen = Math.max(12, Math.min(40, baseSceneCap));
     return {
@@ -999,7 +1284,6 @@ async function getRobustOutline(params: {
     };
   }
 
-  // ✅ PRIMARY FIX: For features (>=45 pages), use Act-splitting to avoid giant JSON truncation.
   if (targetPages >= 45) {
     const sceneCap = baseSceneCap;
 
@@ -1016,11 +1300,8 @@ async function getRobustOutline(params: {
     });
 
     if (split?.shortScript?.length === sceneCap) return split;
-
-    // If act-splitting fails (rare), keep going to smaller single-call attempts below.
   }
 
-  // ---- Secondary path: schema-locked full outline (only for smaller scripts or as backup) ----
   for (let attempt = 1; attempt <= 2; attempt++) {
     if (timeLeftMs(deadline) < 25_000) break;
 
@@ -1040,6 +1321,7 @@ Rules:
   - summary: action beat (${summaryWordSpec})
 - ${summaryRule}
 - Themes: 3–5 items.
+- Do NOT use double-quote characters inside any text field values; rephrase instead.
 
 Synopsis length target: ${synopsisLength}
 `.trim();
@@ -1052,7 +1334,7 @@ Synopsis length target: ${synopsisLength}
       schema_name: "OutlineFull",
       timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
       max_retries: 0,
-      debug: true, // ✅ logs finish_reason/len so you can confirm truncation
+      debug: true,
     });
 
     const parsed = res.data;
@@ -1071,7 +1353,6 @@ Synopsis length target: ${synopsisLength}
       return parsed;
     }
 
-    // Try repair once if we got content back
     if (!parsed && res.content && res.content.length > 50 && timeLeftMs(deadline) > 20_000) {
       const repaired = await repairOutlineJson({
         raw: res.content,
@@ -1089,7 +1370,6 @@ Synopsis length target: ${synopsisLength}
     }
   }
 
-  // ---- Final fallback ----
   const fallbackLen = Math.max(12, Math.min(40, baseSceneCap));
   return {
     logline: "",
@@ -1110,10 +1390,10 @@ type ChunkPlan = {
   part: number;
   startScene: number;
   endScene: number;
-  startState: string; // what MUST already be true at the start of this chunk
-  endState: string; // what MUST be true at the end of this chunk
-  mustInclude: string[]; // concrete requirements (events/reveals/turns)
-  mustAvoid: string[]; // prevent contradictions + repetition
+  startState: string;
+  endState: string;
+  mustInclude: string[];
+  mustAvoid: string[];
 };
 
 function buildChunkPlanSchema(partCount: number) {
@@ -1172,6 +1452,7 @@ For EACH chunk, define:
 - endState: 2–4 sentences describing the exact situation at the END of the chunk
 - mustInclude: 3–8 concrete story requirements that MUST happen in this chunk
 - mustAvoid: repetition, contradictions, resets, re-introducing characters as if new, etc.
+- Do NOT use double-quote characters inside any text field values; rephrase instead.
 
 Chunks:
 ${chunks
@@ -1192,6 +1473,7 @@ ${c.beats}
     schema_name: "ChunkBible",
     timeout_ms: DEFAULT_JSON_CALL_TIMEOUT_MS,
     max_retries: 0,
+    model: MODEL_JSON,
   });
 
   if (res.data?.chunks?.length === chunks.length) return res.data.chunks;
@@ -1202,10 +1484,9 @@ ${c.beats}
 
 export const generateScript = async (idea: string, genre: string, length: string) => {
   const duration = parseLengthToMinutes(length);
-  const targetPages = duration; // 1 page ≈ 1 minute
+  const targetPages = duration;
 
-  // Adjust scene counts based on pacing (High density for features)
-  const approxScenes = Math.round(duration); // 1 scene per minute
+  const approxScenes = Math.round(duration);
   const minScenes = Math.max(3, Math.floor(approxScenes * 0.9));
   const maxScenes = Math.ceil(approxScenes * 1.1);
 
@@ -1259,18 +1540,42 @@ Specifications:
 `.trim();
 
   // --- PATH A: Short scripts (<= 15 min) ---
-  // Sequential is fine here because it's fast.
   if (duration <= 15) {
     const metaPrompt = `${basePrompt}
-Output JSON with ONLY:
-- logline
-- synopsis: ${synopsisLength}
-- themes: Array of 3-5 themes
-- shortScript: Array of scene objects with {scene, description, dialogue}
+Return JSON:
+{
+  "logline": "...",
+  "synopsis": "${synopsisLength}",
+  "themes": ["..."],
+  "shortScript": [{"scene":"...","description":"...","dialogue":"..."}]
+}
+
+Rules:
+- Do NOT use double-quote characters inside any text field values; rephrase instead.
 `.trim();
 
-    const { content: metaJson } = await callOpenAI(metaPrompt, { temperature: 0.6, max_tokens: 2200 });
-    const meta = safeParse(metaJson, "short-meta") ?? { logline: "", synopsis: "", themes: [], shortScript: [] };
+    const metaRes = await callOpenAIJsonSchema<{
+      logline: string;
+      synopsis: string;
+      themes: string[];
+      shortScript: { scene: string; description: string; dialogue: string }[];
+    }>(metaPrompt, buildShortMetaSchema(), {
+      temperature: 0.35,
+      max_tokens: 2400,
+      request_tag: "short-meta",
+      schema_name: "ShortMeta",
+      model: MODEL_JSON,
+      max_retries: 0,
+    });
+
+    const meta =
+      metaRes.data ||
+      safeParse(metaRes.content, "short-meta-fallback") || {
+        logline: "",
+        synopsis: "",
+        themes: [],
+        shortScript: [],
+      };
 
     const writePrompt = `
 Write a screenplay in Fountain format of ~${targetPages} pages (1 page ≈ 220 words).
@@ -1285,7 +1590,11 @@ Enforcement:
 ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, themes: meta.themes }, null, 2)}
 `.trim();
 
-    const { content: scriptText } = await callOpenAIText(writePrompt, { temperature: 0.82, max_tokens: 4096 });
+    const { content: scriptText } = await callOpenAIText(writePrompt, {
+      temperature: 0.82,
+      max_tokens: 4096,
+      model: MODEL_TEXT,
+    });
 
     return {
       logline: meta.logline,
@@ -1296,9 +1605,7 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     };
   }
 
-  // --- PATH B: Feature scripts (Parallel chunk writing, concurrency-capped, retry-safe) ---
-
-  // 1) Outline (now act-splitting primary for features; schema-locked, budget-limited)
+  // --- PATH B: Feature scripts ---
   const outlineParsed = await getRobustOutline({
     idea,
     genre,
@@ -1310,27 +1617,18 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
   const shortScript: ShortScriptItem[] = outlineParsed.shortScript || [];
   const effectiveScenes = Math.max(1, shortScript.length || approxScenes);
 
-  // 2) Choose a SAFE number of chunks (more chunks => smaller/faster calls)
-  // ✅ Recommended: ~8 chunks for ~80 pages (≈10 pages/chunk).
   const chunkCount =
-    targetPages <= 45 ? 4 :
-    targetPages <= 70 ? 6 :
-    targetPages <= 95 ? 8 :
-    10;
+    targetPages <= 45 ? 4 : targetPages <= 70 ? 6 : targetPages <= 95 ? 8 : 10;
 
-  // Safety: never more chunks than scenes
   const safeChunkCount = Math.min(chunkCount, effectiveScenes);
   const pagesPerChunk = Math.ceil(targetPages / safeChunkCount);
 
-  // ✅ Range target (faster + more reliable than "exactly N words")
   const minWords = Math.max(900, Math.round(pagesPerChunk * 210));
   const aimWords = Math.max(minWords, Math.round(pagesPerChunk * 235));
   const maxWords = Math.max(aimWords + 200, Math.round(pagesPerChunk * 255));
 
-  // Tokens needed per chunk (rough estimate)
   const maxTokensPerChunk = clamp(Math.round(maxWords * 1.35), 4200, 12000);
 
-  // 3) Build chunk scene ranges (even distribution)
   const chunkRanges = Array.from({ length: safeChunkCount }, (_, idx) => {
     const startScene = Math.floor(idx * (effectiveScenes / safeChunkCount)) + 1;
     const endScene = Math.min(Math.floor((idx + 1) * (effectiveScenes / safeChunkCount)), effectiveScenes);
@@ -1341,11 +1639,13 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
 
   const chunkInputs = chunkRanges.map((r) => {
     const chunkScenes = shortScript.slice(r.startScene - 1, r.endScene);
-    const beats = compactBeatsForPrompt(chunkScenes, beatsMax);
-    return { ...r, beats };
+    const beats = chunkScenes
+      .slice(0, beatsMax)
+      .map((s) => `#${s.sceneNumber} (Act ${s.act}) ${s.heading} — ${s.summary}`)
+      .join("\n");
+    return { ...r, beats: beats || "(No beats available for this chunk.)" };
   });
 
-  // 4) Create continuity constraints for each chunk (fast JSON call)
   const plans = await getChunkPlans({
     idea,
     genre,
@@ -1354,11 +1654,8 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     chunks: chunkInputs,
   });
 
-  type ChunkGenResult =
-    | { ok: true; content: string }
-    | { ok: false; content: string; error: unknown };
+  type ChunkGenResult = { ok: true; content: string } | { ok: false; content: string; error: unknown };
 
-  // Concurrency cap (env override, default 4)
   const envConc = parseInt(process.env.SCRIPT_CHUNK_CONCURRENCY || "4", 10);
   const chunkConcurrency = clamp(Number.isFinite(envConc) ? envConc : 4, 1, 6);
 
@@ -1367,7 +1664,6 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     index: number,
     attempt: number
   ): Promise<ChunkGenResult> {
-    // Gentle micro-stagger to avoid synchronized bursts even with concurrency
     await delay((index % chunkConcurrency) * 300);
 
     const isStart = index === 0;
@@ -1406,7 +1702,6 @@ ${chunk.beats}
 `.trim();
 
     try {
-      // If retrying, slightly reduce temperature to stabilize output
       const temp = attempt >= 2 ? 0.78 : 0.85;
 
       const { content } = await callOpenAIText(chunkPrompt, {
@@ -1414,52 +1709,44 @@ ${chunk.beats}
         max_tokens: maxTokensPerChunk,
         timeout_ms: DEFAULT_TEXT_CALL_TIMEOUT_MS,
         max_retries: 0,
+        model: MODEL_TEXT,
       });
 
       const cleaned = (content || "").trim();
       if (!cleaned) throw new Error("Empty chunk content");
       return { ok: true, content: cleaned };
     } catch (error) {
-      return {
-        ok: false,
-        content: "",
-        error,
-      };
+      return { ok: false, content: "", error };
     }
   }
 
-  // 5) Generate chunks with concurrency cap (no single failure nukes whole run)
   const firstPass = await mapWithConcurrency(chunkInputs, chunkConcurrency, async (chunk, index) => {
     return generateOneChunk(chunk, index, 1);
   });
 
-  // 6) Retry only failed chunks once (allSettled-style resilience)
   const failedIdx = firstPass
     .map((r, i) => ({ r, i }))
     .filter(({ r }) => !r.ok)
     .map(({ i }) => i);
 
   if (failedIdx.length > 0) {
-    // Small backoff before retry wave
     await delay(900);
 
     const retryResults = await mapWithConcurrency(
       failedIdx,
-      Math.max(1, Math.min(2, chunkConcurrency)), // lighter retry concurrency
+      Math.max(1, Math.min(2, chunkConcurrency)),
       async (idx) => {
-        // Extra backoff per retry index to avoid repeated 429s
         await delay(idx * 250);
         return { idx, res: await generateOneChunk(chunkInputs[idx], idx, 2) };
       }
     );
 
     for (const { idx, res } of retryResults) {
-      firstPass[idx] = res;
+      firstPass[idx] = res as any;
     }
   }
 
-  // 7) Stitch results in order; fill any still-failed chunk with a Fountain boneyard note
-  const stitchedChunks = firstPass.map((r, idx) => {
+  const stitchedChunks = firstPass.map((r: any, idx: number) => {
     if (r.ok) return r.content;
 
     const chunk = chunkInputs[idx];
@@ -1480,8 +1767,6 @@ MUST AVOID: ${(plan.mustAvoid || []).join(", ")}\n\n` : ""}${chunk.beats}
   });
 
   const stitched = stitchedChunks.filter(Boolean).join("\n\n");
-
-  // 8) Sanitize FADE IN duplication (line-anchored)
   const scriptFountain = stripExtraFadeIn(stitched);
 
   return {
@@ -1501,24 +1786,32 @@ Given this film script:
 ${script}
 
 Generate detailed character profiles for ALL main and supporting characters in this ${genre} film.
-For each character, include:
+Return JSON: { "characters": [...] } with the exact fields:
 - name
-- role (protagonist, antagonist, etc.)
-- description (physical appearance, age, background)
-- traits (array of 3-5 personality traits)
-- skinColor (e.g., fair, olive)
-- hairColor (e.g., blonde, black)
-- clothingColor (dominant outfit colors)
-- mood (overall emotional state)
-- visualDescription (detailed for AI image generation)
+- role
+- description
+- traits (array)
+- skinColor
+- hairColor
+- clothingColor
+- mood
+- visualDescription
 - imageUrl (empty string)
 
-Return a JSON object with key "characters" containing the array.
-`;
+Rules:
+- Do NOT use double-quote characters inside any text field values; rephrase instead.
+`.trim();
 
-  const { content } = await callOpenAI(prompt, { temperature: 0.5 });
-  const parsed = safeParse<{ characters: any[] }>(content, "characters");
-  return { characters: parsed?.characters || [] };
+  const res = await callOpenAIJsonSchema<{ characters: Character[] }>(prompt, buildCharactersSchema(), {
+    temperature: 0.35,
+    max_tokens: 2200,
+    request_tag: "characters",
+    schema_name: "Characters",
+    model: MODEL_JSON,
+    max_retries: 0,
+  });
+
+  return { characters: res.data?.characters || [] };
 };
 
 // ---------- Storyboard ----------
@@ -1543,38 +1836,52 @@ export const generateStoryboard = async ({
   const prompt = `
 Generate a detailed storyboard for this ${movieGenre} film idea: ${movieIdea}
 
-Full Script:
-${script}
+Full Script (trimmed):
+${tail(script, 18000)}
 
 Characters:
-${JSON.stringify(characters)}
+${JSON.stringify(characters).slice(0, 12000)}
 
 Specifications:
-- Exactly ${numFrames} main frames
-- Each main frame includes ${coveragePerFrame} coverage shots
-- Total shots: ${numFrames * (coveragePerFrame + 1)}
-- Distribute evenly across script scenes
-- For each frame/shot:
-  - scene: Scene heading from script
-  - shotNumber: Sequential (e.g., 1A, 1B)
-  - description: Visual action
-  - cameraAngle
-  - cameraMovement
-  - lens
-  - lighting
-  - duration (seconds)
-  - dialogue (if any)
-  - soundEffects
-  - notes
-  - imagePrompt (for AI generation)
-  - imageUrl (empty)
+- Target about ${numFrames} main frames (we will normalize if needed)
+- Each main frame should include ~${coveragePerFrame} coverage shots
+- For each frame/shot include:
+  scene, shotNumber, description, cameraAngle, cameraMovement, lens, lighting, duration, dialogue, soundEffects, notes, imagePrompt, imageUrl (empty)
+- Always fill imagePrompt. Leave imageUrl empty.
+- Do NOT use double-quote characters inside any text field values; rephrase instead.
 
-Return JSON with key "storyboard" containing array of main frames, each with coverageShots array.
-`;
+Return JSON with key "storyboard" containing array of main frames, each optionally having coverageShots array.
+`.trim();
 
-  const { content } = await callOpenAI(prompt, { temperature: 0.6 });
-  const parsed = safeParse<{ storyboard: StoryboardFrame[] }>(content, "storyboard");
-  return parsed?.storyboard || [];
+  const res = await callOpenAIJsonSchema<{ storyboard: StoryboardFrame[] }>(prompt, buildStoryboardSchema(), {
+    temperature: 0.4,
+    max_tokens: 4500,
+    request_tag: "storyboard",
+    schema_name: "Storyboard",
+    model: MODEL_JSON,
+    max_retries: 0,
+  });
+
+  let frames = res.data?.storyboard || [];
+  frames = Array.isArray(frames) ? frames : [];
+
+  // Normalize: ensure imageUrl exists, coverageShots exists
+  frames = frames.map((f, idx) => ({
+    ...f,
+    shotNumber: String(f.shotNumber || `${idx + 1}`),
+    imagePrompt: String(f.imagePrompt || f.description || "Cinematic storyboard frame."),
+    imageUrl: "",
+    coverageShots: Array.isArray(f.coverageShots)
+      ? f.coverageShots.map((c, j) => ({
+          ...c,
+          shotNumber: String(c.shotNumber || `${idx + 1}.${j + 1}`),
+          imagePrompt: String(c.imagePrompt || c.description || "Coverage storyboard shot."),
+          imageUrl: "",
+        }))
+      : [],
+  }));
+
+  return frames;
 };
 
 // ---------- Concept ----------
@@ -1582,20 +1889,29 @@ Return JSON with key "storyboard" containing array of main frames, each with cov
 export const generateConcept = async (script: string, genre: string) => {
   const prompt = `
 Based on this ${genre} film script:
-${script}
+${tail(script, 20000)}
 
 Generate a visual concept including:
 - concept object with visualStyle, colorPalette, cameraTechniques, lightingApproach, thematicSymbolism, productionValues
-- visualReferences: array of 3-5 objects with description and imageUrl (real URLs to reference images)
+- visualReferences: array of 3-5 objects with description and imageUrl (reference links if available)
 
-Return the JSON object directly.
-`;
+Rules:
+- Do NOT use double-quote characters inside any text field values; rephrase instead.
+Return JSON.
+`.trim();
 
-  const { content } = await callOpenAI(prompt, { temperature: 0.7 });
-  const parsed = safeParse<{ concept: any; visualReferences: any[] }>(content, "concept");
+  const res = await callOpenAIJsonSchema<{ concept: any; visualReferences: any[] }>(prompt, buildConceptSchema(), {
+    temperature: 0.5,
+    max_tokens: 2200,
+    request_tag: "concept",
+    schema_name: "Concept",
+    model: MODEL_JSON,
+    max_retries: 0,
+  });
+
   return {
-    concept: parsed?.concept || {},
-    visualReferences: parsed?.visualReferences || [],
+    concept: res.data?.concept || {},
+    visualReferences: res.data?.visualReferences || [],
   };
 };
 
@@ -1611,31 +1927,43 @@ export const generateBudget = async (genre: string, length: string) => {
     duration <= 120 ? 200000 : 500000;
 
   const genreMultiplier = /sci[- ]?fi|action/i.test(genre) ? 1.5 : 1;
+  const total = Math.round(baseBudget * genreMultiplier);
 
   const prompt = `
 Generate a detailed film budget breakdown for a ${genre} film of ${length} length.
-Total estimated budget: $${Math.round(baseBudget * genreMultiplier)}
+Total estimated budget: $${total}
 
-Categories:
-- Pre-Production (script, casting)
-- Production (crew, equipment, locations)
-- Post-Production (editing, sound, VFX)
-- Marketing/Distribution
+Return JSON:
+{
+  "categories": [
+    {
+      "name": "...",
+      "amount": number,
+      "percentage": number,
+      "items": [{"name":"...","cost": number}],
+      "tips": ["..."],
+      "alternatives": ["..."]
+    }
+  ]
+}
 
-For each category:
-- name
-- amount
-- percentage (of total)
-- items (array of sub-items with costs)
-- tips (array of budget tips)
-- alternatives (low-cost options)
+Rules:
+- category amounts must roughly sum to total budget
+- percentages should total ~100
+- be realistic for indie film production
+- Do NOT use double-quote characters inside any text field values; rephrase instead.
+`.trim();
 
-Return JSON with key "categories" containing the array.
-`;
+  const res = await callOpenAIJsonSchema<{ categories: any[] }>(prompt, buildBudgetSchema(), {
+    temperature: 0.25,
+    max_tokens: 2600,
+    request_tag: "budget",
+    schema_name: "Budget",
+    model: MODEL_JSON,
+    max_retries: 0,
+  });
 
-  const { content } = await callOpenAI(prompt, { temperature: 0.4 });
-  const parsed = safeParse(content, "budget") || { categories: [] };
-  return parsed;
+  return res.data || { categories: [] };
 };
 
 // ---------- Schedule ----------
@@ -1643,22 +1971,36 @@ Return JSON with key "categories" containing the array.
 export const generateSchedule = async (script: string, length: string) => {
   const prompt = `
 Given this film script:
-${script}
+${tail(script, 20000)}
 
 Generate a shooting schedule for a film of length ${length}.
-For each day, include:
-- day name
-- activities (array of strings)
-- duration
-- location (optional)
-- crew list (optional)
+Return JSON:
+{
+  "schedule": [
+    {
+      "day": "Day 1",
+      "activities": ["..."],
+      "duration": "...",
+      "location": "...",
+      "crew": ["..."]
+    }
+  ]
+}
 
-Return a JSON object with key "schedule" containing the array.
-`;
+Rules:
+- Do NOT use double-quote characters inside any text field values; rephrase instead.
+`.trim();
 
-  const { content } = await callOpenAI(prompt, { temperature: 0.5 });
-  const parsed = safeParse<{ schedule: any[] }>(content, "schedule");
-  return { schedule: parsed?.schedule || [] };
+  const res = await callOpenAIJsonSchema<{ schedule: any[] }>(prompt, buildScheduleSchema(), {
+    temperature: 0.3,
+    max_tokens: 2200,
+    request_tag: "schedule",
+    schema_name: "Schedule",
+    model: MODEL_JSON,
+    max_retries: 0,
+  });
+
+  return { schedule: res.data?.schedule || [] };
 };
 
 // ---------- Locations ----------
@@ -1669,7 +2011,7 @@ A ${genre || "generic"} film featuring a protagonist navigating several dramatic
 - An abandoned warehouse full of shadows and secrets.
 - Rainy neon-lit city streets at night.
 - A dramatic rooftop showdown above a glowing skyline.
-`;
+`.trim();
 
   const usedScript = script && script.trim().length > 0 ? script : fallbackScript;
 
@@ -1680,60 +2022,88 @@ Analyze the following film script and extract ALL distinct filming locations bas
 
 SCRIPT:
 """START_SCRIPT"""
-${usedScript}
+${tail(usedScript, 22000)}
 """END_SCRIPT"""
 
-RULES:
-- Use only actual locations from the script (e.g., "EXT. PARK ENTRANCE - LATER").
-- Do NOT invent generic names like "Primary Location".
-- NEVER leave any field blank or use "N/A".
-- If script lacks details, create plausible cinematic descriptions using the script's location names.
-- Each location must include:
-  - name (from scene heading)
-  - type (Interior or Exterior)
-  - description (visual and atmospheric details)
-  - mood (emotional tone)
-  - colorPalette (key visual tones/colors)
-  - propsOrFeatures (array of objects or environmental features)
-  - scenes (short summary of events)
-  - rating (1–5 for visual impact)
-  - lowBudgetTips (how to recreate affordably)
-  - highBudgetOpportunities (how to elevate production design)
+Return JSON:
+{
+  "locations": [
+    {
+      "name": "...",
+      "type": "Interior|Exterior",
+      "description": "...",
+      "mood": "...",
+      "colorPalette": "...",
+      "propsOrFeatures": ["..."],
+      "scenes": ["..."],
+      "rating": 1-5,
+      "lowBudgetTips": "...",
+      "highBudgetOpportunities": "..."
+    }
+  ]
+}
 
-Return a JSON object with key "locations" containing the array of location objects.
-`;
+Rules:
+- Use only actual location names from scene headings (do not invent generic names).
+- Never leave any field blank.
+- Do NOT use double-quote characters inside any text field values; rephrase instead.
+`.trim();
 
-  const { content } = await callOpenAI(prompt, { temperature: 0.5 });
-  const parsed = safeParse<{ locations: any[] }>(content, "locations");
-  return { locations: parsed?.locations || [] };
+  const res = await callOpenAIJsonSchema<{ locations: any[] }>(prompt, buildLocationsSchema(), {
+    temperature: 0.35,
+    max_tokens: 3200,
+    request_tag: "locations",
+    schema_name: "Locations",
+    model: MODEL_JSON,
+    max_retries: 0,
+  });
+
+  return { locations: res.data?.locations || [] };
 };
 
 // ---------- Sound Assets ----------
 
 export const generateSoundAssets = async (script: string, genre: string) => {
-  // Keeping your current behavior for now (you said focus on script quality first).
-  const duration = parseInt(script.match(/\d+/)?.[0] || "5", 10);
+  // Keep legacy heuristic, but ensure it never NaNs
+  const duration = parseInt(script.match(/\d+/)?.[0] || "5", 10) || 5;
   const numAssets = duration <= 15 ? 5 : duration <= 60 ? 8 : 15;
 
   const prompt = `
 Given this film script:
-${script}
+${tail(script, 22000)}
 
-Generate exactly ${numAssets} sound assets for a ${genre} film, each with:
-- name (unique and descriptive, reflecting the asset's purpose)
-- type (music, sfx, dialogue, ambient)
-- duration (minimum 10 seconds, up to 1:00 for features, formatted as "MM:SS")
-- description (highly detailed, vivid, at least 50 words, for AI audio generation, including specific elements, tones, intensities, and scene enhancement)
-- scenes (array of scene names matching script headings)
-- audioUrl (empty string)
+Generate exactly ${numAssets} sound assets for a ${genre} film.
 
-Ensure assets align with the script's scenes and tone.
-Return a JSON object with key "soundAssets" containing the array of sound asset objects.
-`;
+Return JSON:
+{
+  "soundAssets": [
+    {
+      "name": "...",
+      "type": "music|sfx|dialogue|ambient",
+      "duration": "MM:SS",
+      "description": "at least 50 words, vivid and specific for AI audio generation",
+      "scenes": ["..."],
+      "audioUrl": ""
+    }
+  ]
+}
 
-  const { content } = await callOpenAI(prompt, { temperature: 0.5 });
-  const parsed = safeParse<{ soundAssets: any[] }>(content, "soundAssets");
-  let soundAssets: any[] = parsed?.soundAssets || [];
+Rules:
+- duration must be at least 00:10
+- audioUrl must be an empty string
+- Do NOT use double-quote characters inside any text field values; rephrase instead.
+`.trim();
+
+  const res = await callOpenAIJsonSchema<{ soundAssets: any[] }>(prompt, buildSoundAssetsSchema(), {
+    temperature: 0.35,
+    max_tokens: 2600,
+    request_tag: "sound",
+    schema_name: "SoundAssets",
+    model: MODEL_JSON,
+    max_retries: 0,
+  });
+
+  let soundAssets: any[] = res.data?.soundAssets || [];
 
   const minDuration = duration >= 60 ? "00:30" : "00:10";
   soundAssets = soundAssets.map((asset) => {
