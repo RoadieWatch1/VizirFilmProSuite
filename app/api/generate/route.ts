@@ -13,6 +13,7 @@ import {
 } from "@/lib/generators";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 // ✅ Helps avoid timeouts for long/feature generation on serverless
 export const maxDuration = 300;
@@ -49,7 +50,6 @@ function parseDurationToMinutes(raw: string | undefined): number {
 
 function clampMinutes(mins: number): number {
   if (!Number.isFinite(mins)) return 5;
-  // Reasonable bounds; adjust if you ever want > 240
   return Math.max(1, Math.min(240, Math.round(mins)));
 }
 
@@ -59,7 +59,6 @@ function estimatePagesByWords(text: string, wordsPerPage = 220): number {
 }
 
 function countScenes(text: string): number {
-  // Fountain-ish scene headings
   return (text.match(/^(?:INT\.|EXT\.|INT\/EXT\.|EXT\/INT\.)/gim) || []).length;
 }
 
@@ -165,13 +164,14 @@ export async function POST(request: NextRequest) {
 
     switch (step) {
       case "characters": {
-        if (!scriptContent) {
+        const content = scriptContent || script;
+        if (!content) {
           return NextResponse.json(
-            { error: "scriptContent is required for generating characters." },
+            { error: "scriptContent (or script) is required for generating characters." },
             { status: 400 }
           );
         }
-        const result = await generateCharacters(scriptContent, movieGenre || "");
+        const result = await generateCharacters(content, movieGenre || "");
         return NextResponse.json(result);
       }
 
