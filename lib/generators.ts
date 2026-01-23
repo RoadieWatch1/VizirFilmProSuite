@@ -27,6 +27,10 @@ function getOpenAI(): OpenAI {
   return _openai;
 }
 
+// Optional model overrides (keeps defaults if unset)
+const MODEL_TEXT = process.env.OPENAI_MODEL_TEXT || "gpt-4o";
+const MODEL_JSON = process.env.OPENAI_MODEL_JSON || "gpt-4o";
+
 // ---------- Helpers for OpenAI calls ----------
 
 type ChatOptions = {
@@ -45,7 +49,7 @@ async function callOpenAI(
   const openai = getOpenAI();
 
   const completion = await openai.chat.completions.create({
-    model: options.model || "gpt-4o",
+    model: options.model || MODEL_JSON,
     messages: [
       {
         role: "system",
@@ -213,7 +217,7 @@ async function callOpenAIText(
   const openai = getOpenAI();
 
   const completion = await openai.chat.completions.create({
-    model: options.model || "gpt-4o",
+    model: options.model || MODEL_TEXT,
     messages: [
       {
         role: "system",
@@ -229,7 +233,7 @@ FORMAT RULES:
 - Action in present tense.
 - CHARACTER names uppercase; dialogue under names.
 - No summaries, no analysis, no JSON, no commentary.
-- Continue seamlessly. Do not restate prior scenes.
+- Continue seamlessly.
 - Aim for the requested pages (1 page ≈ 220 words).
 `,
       },
@@ -269,7 +273,7 @@ async function callOpenAIJsonSchema<T>(
 
   try {
     const completion = await openai.chat.completions.create({
-      model: options.model || "gpt-4o",
+      model: options.model || MODEL_JSON,
       messages,
       temperature: options.temperature ?? 0.35,
       response_format: {
@@ -352,6 +356,10 @@ export interface ShortScriptItem {
 
 // ---------- Utility ----------
 
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
 function estimatePagesFromText(text: string, wordsPerPage = 220) {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
   return Math.max(1, Math.round(words / wordsPerPage));
@@ -379,33 +387,52 @@ function safeParse<T = any>(raw: string, tag = "json"): T | null {
 }
 
 /**
- * ✅ Robust runtime parsing
- * Accepts "120 min", "120m", "2h", "2 hours", "feature", etc.
+ * ✅ FIXED: Robust runtime parsing (supports combos like "1 hour 20 min" and "1h20m")
+ * Examples:
+ * - "1 hour 20 min" -> 80
+ * - "1h20m" -> 80
+ * - "2h" -> 120
+ * - "80 min" -> 80
  */
 function parseLengthToMinutes(raw: string): number {
   if (!raw) return 5;
   const s = String(raw).trim().toLowerCase();
 
-  const hrMatch = s.match(/(\d+)\s*(h|hr|hour|hours)\b/);
-  if (hrMatch) {
-    const h = parseInt(hrMatch[1], 10);
-    if (!isNaN(h)) return Math.max(1, h * 60);
+  if (s.includes("feature")) return 120;
+  if (s.includes("short")) return 10;
+
+  // HH:MM
+  const colon = s.match(/\b(\d{1,2})\s*:\s*(\d{1,2})\b/);
+  if (colon) {
+    const hh = parseInt(colon[1], 10);
+    const mm = parseInt(colon[2], 10);
+    if (!isNaN(hh) && !isNaN(mm)) return Math.max(1, hh * 60 + mm);
   }
 
+  const hourMatch = s.match(/(\d+(?:\.\d+)?)\s*(h|hr|hour|hours)\b/);
+  const minMatch = s.match(/(\d{1,3})\s*(m|min|mins|minute|minutes)\b/);
+
+  const hours = hourMatch ? parseFloat(hourMatch[1]) : 0;
+  const mins = minMatch ? parseInt(minMatch[1], 10) : 0;
+
+  if (hours && !isNaN(hours)) {
+    const total = Math.round(hours * 60) + (isNaN(mins) ? 0 : mins);
+    return Math.max(1, total);
+  }
+
+  if (minMatch && !isNaN(mins)) return Math.max(1, mins);
+
+  // Fallback: first number = minutes
   const numMatch = s.match(/(\d{1,3})/);
   if (numMatch) {
     const m = parseInt(numMatch[1], 10);
     if (!isNaN(m)) return Math.max(1, m);
   }
 
-  if (s.includes("feature")) return 120;
-  if (s.includes("short")) return 10;
-
   return 5;
 }
 
 function compactBeatsForPrompt(scenes: ShortScriptItem[], maxItems = 24) {
-  // ✅ Step 2 fix: keep prompts small (faster + reduces truncation)
   if (!scenes?.length) return "(No beats available for this chunk.)";
   const slice = scenes.slice(0, maxItems);
   const lines = slice.map((s) => {
@@ -421,6 +448,25 @@ function compactBeatsForPrompt(scenes: ShortScriptItem[], maxItems = 24) {
   return lines.join("\n");
 }
 
+function stripExtraFadeIn(text: string) {
+  // Find the first FADE IN / FADE IN:
+  const firstMatch = /\bFADE IN:?\b/.exec(text);
+  
+  // If not found, return original
+  if (!firstMatch) return text.trim();
+
+  // If found, keep everything up to the end of the first match
+  const index = firstMatch.index;
+  const length = firstMatch[0].length;
+  const endOfFirst = index + length;
+
+  const head = text.slice(0, endOfFirst);
+  // Remove all subsequent occurrences from the rest of the text
+  const tail = text.slice(endOfFirst).replace(/\bFADE IN:?\b/g, "");
+
+  return (head + tail).trim();
+}
+
 // ---------- Robust Outline helper ----------
 
 type OutlineResult = {
@@ -431,7 +477,6 @@ type OutlineResult = {
 };
 
 function computeSceneCap(targetPages: number, approxScenes: number) {
-  // ✅ Feature-safe caps to prevent huge JSON (and truncation)
   let cap = approxScenes;
 
   if (targetPages >= 110) cap = Math.min(approxScenes, 85);
@@ -724,7 +769,7 @@ ${JSON.stringify(actsParsed)}
     }
   }
 
-  // ---- Final fallback (should be rare now) ----
+  // ---- Final fallback ----
   const fallbackLen = Math.max(12, Math.min(40, baseSceneCap));
   return {
     logline: "",
@@ -739,12 +784,103 @@ ${JSON.stringify(actsParsed)}
   };
 }
 
+// ---------- Parallel chunk "bible" for continuity ----------
+
+type ChunkPlan = {
+  part: number;
+  startScene: number;
+  endScene: number;
+  startState: string; // what MUST already be true at the start of this chunk
+  endState: string; // what MUST be true at the end of this chunk
+  mustInclude: string[]; // concrete requirements (events/reveals/turns)
+  mustAvoid: string[]; // prevent contradictions + repetition
+};
+
+function buildChunkPlanSchema(partCount: number) {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["chunks"],
+    properties: {
+      chunks: {
+        type: "array",
+        minItems: partCount,
+        maxItems: partCount,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["part", "startScene", "endScene", "startState", "endState", "mustInclude", "mustAvoid"],
+          properties: {
+            part: { type: "integer", minimum: 1, maximum: 20 },
+            startScene: { type: "integer", minimum: 1, maximum: 5000 },
+            endScene: { type: "integer", minimum: 1, maximum: 5000 },
+            startState: { type: "string" },
+            endState: { type: "string" },
+            mustInclude: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 8 },
+            mustAvoid: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 7 },
+          },
+        },
+      },
+    },
+  };
+}
+
+async function getChunkPlans(params: {
+  idea: string;
+  genre: string;
+  targetPages: number;
+  outline: OutlineResult;
+  chunks: { part: number; startScene: number; endScene: number; beats: string }[];
+}): Promise<ChunkPlan[] | null> {
+  const { idea, genre, targetPages, outline, chunks } = params;
+
+  const prompt = `
+Create a continuity "chunk bible" for parallel screenplay writing.
+
+Movie:
+- Genre: ${genre}
+- Target pages: ${targetPages}
+- Idea: ${idea}
+
+Story Context:
+- Logline: ${outline.logline}
+- Synopsis: ${outline.synopsis}
+- Themes: ${(outline.themes || []).slice(0, 6).join(", ")}
+
+For EACH chunk, define:
+- startState: 2–4 sentences describing the exact situation at the START of the chunk
+- endState: 2–4 sentences describing the exact situation at the END of the chunk
+- mustInclude: 3–8 concrete story requirements that MUST happen in this chunk
+- mustAvoid: repetition, contradictions, resets, re-introducing characters as if new, etc.
+
+Chunks:
+${chunks
+  .map(
+    (c) => `
+PART ${c.part} — Scenes ${c.startScene} to ${c.endScene}
+BEATS (summary, do not rewrite here):
+${c.beats}
+`.trim()
+  )
+  .join("\n\n")}
+`.trim();
+
+  const res = await callOpenAIJsonSchema<{ chunks: ChunkPlan[] }>(prompt, buildChunkPlanSchema(chunks.length), {
+    temperature: 0.2,
+    max_tokens: 1800,
+  });
+
+  if (res.data?.chunks?.length === chunks.length) return res.data.chunks;
+  return null;
+}
+
 // ---------- GENERATORS ----------
 
 export const generateScript = async (idea: string, genre: string, length: string) => {
   const duration = parseLengthToMinutes(length);
   const targetPages = duration; // 1 page ≈ 1 minute
 
+  // Adjust scene counts based on pacing
   const approxScenes = Math.round(duration / 1.2);
   const minScenes = Math.max(3, Math.floor(approxScenes * 0.75));
   const maxScenes = Math.ceil(approxScenes * 1.25);
@@ -755,41 +891,31 @@ export const generateScript = async (idea: string, genre: string, length: string
   let synopsisLength = "150 words";
 
   if (duration <= 1) {
-    structureGuide = "A very concise script with 1-2 scenes, minimal dialogue, focus on visual storytelling.";
+    structureGuide = "A micro-short with 1-2 scenes, visual storytelling, punchy ending.";
     numCharacters = 1;
     synopsisLength = "50 words";
-  } else if (duration <= 5) {
-    structureGuide = "A short script with 3-5 scenes, concise dialogue, and clear setup/resolution.";
-    numCharacters = 2;
-    synopsisLength = "100 words";
-  } else if (duration <= 10) {
-    structureGuide = "A medium-short script with 6-8 scenes, basic character development, rising action, and resolution.";
-    numActs = 3;
-    numCharacters = 3;
-    synopsisLength = "150 words";
   } else if (duration <= 15) {
-    structureGuide = "A medium script with 8-12 scenes, full three-act structure, character development, and plot twists.";
+    structureGuide = "A short film with clear setup, rising action, and twist/resolution.";
     numActs = 3;
     numCharacters = 3;
     synopsisLength = "200 words";
-  } else if (duration <= 30) {
-    structureGuide =
-      "A long script with 20-30 scenes, extensive character arcs, multiple subplots, and detailed world-building.";
-    numActs = 3;
-    numCharacters = 4;
-    synopsisLength = "300 words";
   } else if (duration <= 60) {
-    structureGuide =
-      "A feature-length script with 40-60 scenes, detailed three-act structure, multiple storylines, deep character development, and thematic complexity.";
+    structureGuide = "A featurette. Streamlined plot, limited locations, focus on one main conflict.";
     numActs = 3;
     numCharacters = 5;
-    synopsisLength = "400 words";
+    synopsisLength = "350 words";
+  } else if (duration <= 90) {
+    structureGuide =
+      "A standard feature film (75-90 pages). Tight pacing, no filler scenes, strong three-act structure with subplots and character arcs.";
+    numActs = 3;
+    numCharacters = 6;
+    synopsisLength = "500 words";
   } else {
     structureGuide =
-      "A full feature film with 80-120 scenes, extended three-act structure, complex subplots, ensemble cast, and thematic depth.";
+      "An epic feature (100+ pages). Complex subplots, ensemble cast, extended character development.";
     numActs = 3;
     numCharacters = 7;
-    synopsisLength = "500 words";
+    synopsisLength = "600 words";
   }
 
   const basePrompt = `
@@ -806,9 +932,10 @@ Specifications:
 - Format: Standard screenplay format ONLY (no extra text)
 - Themes: 3-5 key themes
 - Style: Highly cinematic, detailed action, and natural dialogue with subtext. Do not summarize.
-`;
+`.trim();
 
-  // ---------- Short scripts (<= 15 min): meta JSON + plain-text script ----------
+  // --- PATH A: Short scripts (<= 15 min) ---
+  // Sequential is fine here because it's fast.
   if (duration <= 15) {
     const metaPrompt = `${basePrompt}
 Output JSON with ONLY:
@@ -816,7 +943,8 @@ Output JSON with ONLY:
 - synopsis: ${synopsisLength}
 - themes: Array of 3-5 themes
 - shortScript: Array of scene objects with {scene, description, dialogue}
-`;
+`.trim();
+
     const { content: metaJson } = await callOpenAI(metaPrompt, { temperature: 0.6, max_tokens: 2200 });
     const meta = safeParse(metaJson, "short-meta") ?? { logline: "", synopsis: "", themes: [], shortScript: [] };
 
@@ -831,11 +959,9 @@ Enforcement:
 
 === META ===
 ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, themes: meta.themes }, null, 2)}
-`;
-    const { content: scriptText } = await callOpenAIText(writePrompt, {
-      temperature: 0.8,
-      max_tokens: 4096,
-    });
+`.trim();
+
+    const { content: scriptText } = await callOpenAIText(writePrompt, { temperature: 0.82, max_tokens: 4096 });
 
     return {
       logline: meta.logline,
@@ -846,7 +972,9 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     };
   }
 
-  // ---------- Medium/Long scripts: outline as JSON, writing as text chunks ----------
+  // --- PATH B: Feature scripts (Parallel chunk writing) ---
+
+  // 1) Outline (schema-locked)
   const outlineParsed = await getRobustOutline({
     idea,
     genre,
@@ -854,146 +982,106 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     approxScenes,
     synopsisLength,
   });
+
   const shortScript: ShortScriptItem[] = outlineParsed.shortScript || [];
-
-  const wordsPerPage = 220;
-
-  /**
-   * ✅ Step 2: 300s timeout protection (reduce total OpenAI calls HARD)
-   * Goal:
-   * - 60 pages → ~3 calls total (2 chunks + 1 expansion max)
-   * - 120 pages → ~5 calls total (4 chunks + 1 expansion max)
-   */
-  const pagesPerChunk =
-    targetPages >= 90 ? 30 : // 90–120 => 3–4 chunks
-    targetPages >= 60 ? 25 : // 60–89  => 3–4 chunks
-    targetPages >= 35 ? 15 : // 35–59  => 3–4 chunks
-    8; // 16–34
-
-  const numChunks = Math.ceil(targetPages / pagesPerChunk);
-
-  // Bigger outputs for big chunks (keeps chunks from under-shooting)
-  const chunkMaxTokens =
-    pagesPerChunk >= 30 ? 12000 :
-    pagesPerChunk >= 25 ? 11000 :
-    pagesPerChunk >= 15 ? 9000 :
-    4096;
-
-  // Vercel hard timeout is 300s; stop earlier to return safely.
-  const HARD_TIME_LIMIT_MS = 260_000;
-  const startedAt = Date.now();
-  const timeOk = () => Date.now() - startedAt < HARD_TIME_LIMIT_MS;
-
-  let scriptFountain = "";
-  let pageEstimate = 0;
-  let chunkIndex = 0;
-  let previousChunkTail = "";
-
-  // Base on actual outline length (Step 1 caps scenes)
   const effectiveScenes = Math.max(1, shortScript.length || approxScenes);
 
-  // Strict loop bound: no runaway loops
-  const maxChunkLoops = Math.min(numChunks, 6); // never more than 6 chunks (even if params go wild)
+  // 2) Choose a SAFE number of parallel chunks (limits rate issues, avoids 10+ parallel calls)
+  // 80 pages -> 5 chunks (~16 pages each) is usually the sweet spot under Vercel.
+  const chunkCount =
+    targetPages <= 45 ? 3 :
+    targetPages <= 70 ? 4 :
+    targetPages <= 95 ? 5 :
+    6;
 
-  while (timeOk() && pageEstimate < targetPages - 2 && chunkIndex < maxChunkLoops) {
-    const startScene = Math.floor(chunkIndex * (effectiveScenes / numChunks)) + 1;
-    const endScene = Math.min(
-      Math.floor((chunkIndex + 1) * (effectiveScenes / numChunks)),
-      effectiveScenes
-    );
-    const chunkScenes = shortScript.slice(startScene - 1, endScene);
+  // ✅ SAFETY CHECK: Ensure we don't have more chunks than scenes
+  const safeChunkCount = Math.min(chunkCount, effectiveScenes);
+  const pagesPerChunk = Math.ceil(targetPages / safeChunkCount);
 
-    const beats = compactBeatsForPrompt(chunkScenes, 24);
-    const isStart = !previousChunkTail;
+  // Tokens needed per chunk (rough estimate: 1 page ~ 220 words; 1 token ~ ~0.75 words)
+  const approxWords = pagesPerChunk * 220;
+  const maxTokensPerChunk = clamp(Math.round(approxWords * 1.35), 4096, 12000);
 
-    // Smaller context tail for speed
-    const contextTail = previousChunkTail || "(Script start)";
+  // 3) Build chunk scene ranges (even distribution)
+  const chunkRanges = Array.from({ length: safeChunkCount }, (_, idx) => {
+    const startScene = Math.floor(idx * (effectiveScenes / safeChunkCount)) + 1;
+    const endScene = Math.min(Math.floor((idx + 1) * (effectiveScenes / safeChunkCount)), effectiveScenes);
+    return { part: idx + 1, startScene, endScene };
+  }).filter((r) => r.endScene >= r.startScene);
 
-    const continuationPrompt = `
-Write approximately ${pagesPerChunk} pages of screenplay in **Fountain format**.
-1 page ≈ ${wordsPerPage} words. Output screenplay text ONLY.
+  const chunkInputs = chunkRanges.map((r) => {
+    const chunkScenes = shortScript.slice(r.startScene - 1, r.endScene);
+    // We allow more beats here because we *don't* have previousChunkTail in parallel.
+    const beats = compactBeatsForPrompt(chunkScenes, 44);
+    return { ...r, beats };
+  });
 
-${isStart ? `Start from scratch. Include "FADE IN:" and the first scene heading.` : `Continue seamlessly from the prior text. Do NOT repeat any lines.`}
+  // 4) Create continuity constraints for each chunk (fast JSON call)
+  const plans = await getChunkPlans({
+    idea,
+    genre,
+    targetPages,
+    outline: outlineParsed,
+    chunks: chunkInputs,
+  });
 
-Enforcement:
-- Slug lines often (INT./EXT.)
-- NEVER go ~350–450 words without a new slug line
-- Keep scenes readable + countable for production
-- No summaries, no commentary, no JSON
+  // 5) Parallel generation
+  const chunkPromises = chunkInputs.map(async (chunk, index) => {
+    const isStart = index === 0;
+    const plan = plans?.[index];
 
-Chunk target:
-- Start around scene ${startScene} and continue through scene ${endScene}
-- If you finish early, keep going into the next logical beats.
+    const chunkPrompt = `
+Write PART ${chunk.part} of ${chunkInputs.length} of a feature screenplay in **Fountain** format.
 
-RECENT CONTEXT (do not repeat):
-${contextTail}
+GLOBAL CONTEXT:
+Genre: ${genre}
+Logline: ${outlineParsed.logline}
+Synopsis: ${outlineParsed.synopsis}
+Themes: ${(outlineParsed.themes || []).slice(0, 6).join(", ")}
 
-BEATS (follow these in order, expand into full scenes):
-${beats}
+TARGET:
+- Write ~${pagesPerChunk} pages for this part.
+- Cover scenes #${chunk.startScene} through #${chunk.endScene}.
+- Output screenplay text ONLY (no headings like "PART 2", no JSON, no commentary).
+
+FORMAT / PACING RULES:
+- ${isStart ? 'Include "FADE IN:" exactly once at the very start.' : 'Do NOT include "FADE IN:". Start with the first scene heading.'}
+- Use slug lines frequently (INT./EXT.).
+- NEVER go ~350–450 words without a new slug line.
+- Action is present tense. Character names uppercase. Dialogue under names.
+- No summaries. No analysis. No camera directions.
+
+${plan ? `CONTINUITY CONSTRAINTS (must obey):
+START STATE:
+${plan.startState}
+
+END STATE:
+${plan.endState}
+
+MUST INCLUDE:
+${(plan.mustInclude || []).map((x) => `- ${x}`).join("\n")}
+
+MUST AVOID:
+${(plan.mustAvoid || []).map((x) => `- ${x}`).join("\n")}
+` : ""}
+
+BEATS TO EXPAND (follow in order):
+${chunk.beats}
 `.trim();
 
-    const chunk = await callOpenAIText(continuationPrompt, {
+    const { content } = await callOpenAIText(chunkPrompt, {
       temperature: 0.82,
-      max_tokens: chunkMaxTokens,
+      max_tokens: maxTokensPerChunk,
     });
 
-    const chunkText = (chunk.content || "").trim();
-    if (!chunkText) break;
+    return (content || "").trim();
+  });
 
-    scriptFountain += (scriptFountain ? "\n\n" : "") + chunkText;
-    pageEstimate = estimatePagesFromText(scriptFountain, wordsPerPage);
+  const generatedChunks = await Promise.all(chunkPromises);
 
-    // Small tail = fast prompts
-    previousChunkTail = tail(scriptFountain, targetPages >= 60 ? 1800 : 2600);
-    chunkIndex++;
-
-    // Safety: avoid massive overshoot
-    if (pageEstimate > targetPages + 12) break;
-  }
-
-  /**
-   * ✅ Step 2: Controlled expansion (MAX 1 extra call for features)
-   */
-  const minTarget = Math.round(targetPages * 0.9);
-
-  if (timeOk() && pageEstimate < minTarget) {
-    const remaining = targetPages - pageEstimate;
-    const addPages = Math.min(
-      targetPages >= 60 ? 12 : 10,
-      Math.max(6, Math.round(remaining * 0.6))
-    );
-
-    const expansionPrompt = `
-Continue the screenplay from the RECENT CONTEXT below.
-Write ~${addPages} more pages in Fountain format.
-
-Add:
-- connective scenes that bridge beats naturally
-- richer dialogue with subtext
-- character moments that deepen arcs
-- escalation of stakes and consequences
-
-Rules:
-- No contradictions
-- No summaries
-- Keep slug lines frequent
-
-RECENT CONTEXT:
-${previousChunkTail}
-`.trim();
-
-    const expansion = await callOpenAIText(expansionPrompt, {
-      temperature: 0.86,
-      max_tokens: Math.max(7000, Math.min(12000, chunkMaxTokens)),
-    });
-
-    const addText = (expansion.content || "").trim();
-    if (addText) {
-      scriptFountain += "\n\n" + addText;
-      pageEstimate = estimatePagesFromText(scriptFountain, wordsPerPage);
-      previousChunkTail = tail(scriptFountain, targetPages >= 60 ? 1800 : 2600);
-    }
-  }
+  // 6) Stitch + sanitize (remove duplicate FADE IN if a later chunk slipped it in)
+  const stitched = generatedChunks.filter(Boolean).join("\n\n");
+  const scriptFountain = stripExtraFadeIn(stitched);
 
   return {
     logline: outlineParsed.logline,
