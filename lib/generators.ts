@@ -56,29 +56,6 @@ async function callOpenAI(
         content: `
 You are an expert film development AI.
 
-**Example of screenplay format**:
-FADE IN:
-
-INT. COFFEE SHOP - DAY
-
-JOHN, 30s, disheveled but charming, sips his coffee. The shop is bustling with PATRONS chatting. Sunlight streams through the windows, casting long shadows.
-
-JOHN
-(whispering to himself)
-Another day, another dollar.
-
-He spots MARY across the room, 20s, elegant, reading a book. He straightens up, heart racing.
-
-JOHN (CONT'D)
-Excuse me, is this seat taken?
-
-MARY looks up, smiles faintly.
-
-MARY
-No, go ahead.
-
-(Expand with more details as needed to fill length)
-
 **When generating scripts**, produce JSON like:
 {
   "logline": "...",
@@ -234,12 +211,11 @@ FORMAT RULES:
 - CHARACTER names uppercase; dialogue under names.
 - No summaries, no analysis, no JSON, no commentary.
 - Continue seamlessly.
-- Aim for the requested pages (1 page ≈ 220 words).
 `,
       },
       { role: "user", content: prompt },
     ],
-    temperature: options.temperature ?? 0.8,
+    temperature: options.temperature ?? 0.85, // Higher temp for more creative expansion
     max_tokens: options.max_tokens ?? 4096,
     ...options,
   });
@@ -386,14 +362,6 @@ function safeParse<T = any>(raw: string, tag = "json"): T | null {
   }
 }
 
-/**
- * ✅ FIXED: Robust runtime parsing (supports combos like "1 hour 20 min" and "1h20m")
- * Examples:
- * - "1 hour 20 min" -> 80
- * - "1h20m" -> 80
- * - "2h" -> 120
- * - "80 min" -> 80
- */
 function parseLengthToMinutes(raw: string): number {
   if (!raw) return 5;
   const s = String(raw).trim().toLowerCase();
@@ -422,7 +390,6 @@ function parseLengthToMinutes(raw: string): number {
 
   if (minMatch && !isNaN(mins)) return Math.max(1, mins);
 
-  // Fallback: first number = minutes
   const numMatch = s.match(/(\d{1,3})/);
   if (numMatch) {
     const m = parseInt(numMatch[1], 10);
@@ -466,6 +433,9 @@ function stripExtraFadeIn(text: string) {
 
   return (head + tail).trim();
 }
+
+// Helper: Stagger requests to avoid 429 Rate Limits
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ---------- Robust Outline helper ----------
 
@@ -629,29 +599,15 @@ async function getRobustOutline(params: {
 
   const baseSceneCap = computeSceneCap(targetPages, approxScenes);
 
-  const makeSummaryRule = (attempt: number) => {
-    if (targetPages >= 90)
-      return attempt <= 1
-        ? "Keep each scene summary to 10–16 words (1 tight sentence)."
-        : "Keep each scene summary to 8–14 words (very tight).";
-    if (targetPages >= 60)
-      return attempt <= 1
-        ? "Keep each scene summary to 12–20 words (1–2 sentences)."
-        : "Keep each scene summary to 10–16 words (tight).";
-    if (targetPages >= 30)
-      return attempt <= 1
-        ? "Keep each scene summary to 18–30 words (2 sentences max)."
-        : "Keep each scene summary to 14–24 words (tight).";
-    return "Keep each scene summary to 35–60 words (2–4 sentences).";
-  };
+  // ✅ Force longer, more descriptive summaries to prevent "lazy" scene generation
+  const summaryRule = "Make scene summaries detailed (25-45 words) to guide the writer.";
 
   // ---- Primary path: schema-locked full outline ----
   for (let attempt = 1; attempt <= 4; attempt++) {
     const sceneCap = Math.max(12, baseSceneCap - (attempt - 1) * 15);
-    const summaryRule = makeSummaryRule(attempt);
-
+    
     const prompt = `
-Generate a compact but production-ready film outline for a ${genre} film based on this idea:
+Generate a detailed film outline for a ${genre} film based on this idea:
 ${idea}
 
 Rules:
@@ -660,8 +616,8 @@ Rules:
 - Each shortScript item must be:
   - act: 1, 2, or 3
   - sceneNumber: sequential starting at 1
-  - heading: proper slug line like "INT. LOCATION - DAY" or "EXT. LOCATION - NIGHT"
-  - summary: concise beat summary
+  - heading: proper slug line like "INT. LOCATION - DAY"
+  - summary: DETAILED action beat (25-45 words).
 - ${summaryRule}
 - Themes: 3–5 items.
 
@@ -705,10 +661,6 @@ Synopsis length target: ${synopsisLength}
         return repaired;
       }
     }
-
-    console.warn(
-      `[getRobustOutline] attempt=${attempt} sceneCap=${sceneCap} finish_reason=${res.finish_reason} used_schema=${res.used_schema}`
-    );
   }
 
   // ---- Fallback path: acts -> scenes (both schema-locked) ----
@@ -736,17 +688,15 @@ Constraints:
 
   if (actsParsed?.acts?.length === 3) {
     const sceneCap = baseSceneCap;
-    const summaryRule = makeSummaryRule(2);
-
+    
     const scenesPrompt = `
 Using the act summaries below, produce EXACTLY ${sceneCap} shortScript scene beats.
 
 Rules:
 - sceneNumber sequential starting at 1
-- Use proper headings like "INT. ... - DAY" / "EXT. ... - NIGHT"
-- ${summaryRule}
+- Use proper headings like "INT. ... - DAY"
+- Provide detailed summaries (25-40 words each) for the writer.
 - Act 2 is typically longest; distribute scenes realistically.
-- Do not invent extra keys.
 
 ACTS_JSON:
 ${JSON.stringify(actsParsed)}
@@ -858,7 +808,7 @@ ${chunks
   .map(
     (c) => `
 PART ${c.part} — Scenes ${c.startScene} to ${c.endScene}
-BEATS (summary, do not rewrite here):
+BEATS (summary):
 ${c.beats}
 `.trim()
   )
@@ -880,10 +830,10 @@ export const generateScript = async (idea: string, genre: string, length: string
   const duration = parseLengthToMinutes(length);
   const targetPages = duration; // 1 page ≈ 1 minute
 
-  // Adjust scene counts based on pacing
-  const approxScenes = Math.round(duration / 1.2);
-  const minScenes = Math.max(3, Math.floor(approxScenes * 0.75));
-  const maxScenes = Math.ceil(approxScenes * 1.25);
+  // Adjust scene counts based on pacing (High density for features)
+  const approxScenes = Math.round(duration); // 1 scene per minute
+  const minScenes = Math.max(3, Math.floor(approxScenes * 0.9));
+  const maxScenes = Math.ceil(approxScenes * 1.1);
 
   let structureGuide = "";
   let numActs = 1;
@@ -986,8 +936,8 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
   const shortScript: ShortScriptItem[] = outlineParsed.shortScript || [];
   const effectiveScenes = Math.max(1, shortScript.length || approxScenes);
 
-  // 2) Choose a SAFE number of parallel chunks (limits rate issues, avoids 10+ parallel calls)
-  // 80 pages -> 5 chunks (~16 pages each) is usually the sweet spot under Vercel.
+  // 2) Choose a SAFE number of parallel chunks
+  // We need chunks small enough to be dense, but few enough to fit in limits.
   const chunkCount =
     targetPages <= 45 ? 3 :
     targetPages <= 70 ? 4 :
@@ -997,10 +947,12 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
   // ✅ SAFETY CHECK: Ensure we don't have more chunks than scenes
   const safeChunkCount = Math.min(chunkCount, effectiveScenes);
   const pagesPerChunk = Math.ceil(targetPages / safeChunkCount);
+  
+  // ✅ WORD COUNT TARGET (Important for forcing length)
+  const targetWords = pagesPerChunk * 250; // 250 words per page to force density
 
-  // Tokens needed per chunk (rough estimate: 1 page ~ 220 words; 1 token ~ ~0.75 words)
-  const approxWords = pagesPerChunk * 220;
-  const maxTokensPerChunk = clamp(Math.round(approxWords * 1.35), 4096, 12000);
+  // Tokens needed per chunk (rough estimate)
+  const maxTokensPerChunk = clamp(Math.round(targetWords * 1.5), 5000, 14000);
 
   // 3) Build chunk scene ranges (even distribution)
   const chunkRanges = Array.from({ length: safeChunkCount }, (_, idx) => {
@@ -1025,8 +977,11 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     chunks: chunkInputs,
   });
 
-  // 5) Parallel generation
+  // 5) Parallel generation with STAGGERING to avoid rate limits
   const chunkPromises = chunkInputs.map(async (chunk, index) => {
+    // ✅ Stagger requests by 1.5s to prevent 429 Too Many Requests
+    await delay(index * 1500);
+
     const isStart = index === 0;
     const plan = plans?.[index];
 
@@ -1040,37 +995,28 @@ Synopsis: ${outlineParsed.synopsis}
 Themes: ${(outlineParsed.themes || []).slice(0, 6).join(", ")}
 
 TARGET:
-- Write ~${pagesPerChunk} pages for this part.
+- Write exactly ${targetWords} words (~${pagesPerChunk} pages).
 - Cover scenes #${chunk.startScene} through #${chunk.endScene}.
-- Output screenplay text ONLY (no headings like "PART 2", no JSON, no commentary).
+- EXPAND the beats. Do not summarize. Write full dialogue and detailed action.
 
-FORMAT / PACING RULES:
+FORMAT RULES:
 - ${isStart ? 'Include "FADE IN:" exactly once at the very start.' : 'Do NOT include "FADE IN:". Start with the first scene heading.'}
-- Use slug lines frequently (INT./EXT.).
-- NEVER go ~350–450 words without a new slug line.
-- Action is present tense. Character names uppercase. Dialogue under names.
-- No summaries. No analysis. No camera directions.
+- Use slug lines frequently.
+- Action in present tense.
 
-${plan ? `CONTINUITY CONSTRAINTS (must obey):
-START STATE:
-${plan.startState}
-
-END STATE:
-${plan.endState}
-
-MUST INCLUDE:
-${(plan.mustInclude || []).map((x) => `- ${x}`).join("\n")}
-
-MUST AVOID:
-${(plan.mustAvoid || []).map((x) => `- ${x}`).join("\n")}
+${plan ? `CONTINUITY CONSTRAINTS:
+START STATE: ${plan.startState}
+END STATE: ${plan.endState}
+MUST INCLUDE: ${(plan.mustInclude || []).join(", ")}
+MUST AVOID: ${(plan.mustAvoid || []).join(", ")}
 ` : ""}
 
-BEATS TO EXPAND (follow in order):
+BEATS TO EXPAND:
 ${chunk.beats}
 `.trim();
 
     const { content } = await callOpenAIText(chunkPrompt, {
-      temperature: 0.82,
+      temperature: 0.85, // Creative freedom
       max_tokens: maxTokensPerChunk,
     });
 
