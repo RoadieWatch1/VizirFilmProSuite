@@ -31,15 +31,86 @@ function getOpenAI(): OpenAI {
 const MODEL_TEXT = process.env.OPENAI_MODEL_TEXT || "gpt-4o";
 const MODEL_JSON = process.env.OPENAI_MODEL_JSON || "gpt-4o";
 
+// ✅ Debug + timeout guards (prevents hidden SDK retries / runaway outline loops)
+const DEBUG_OUTLINE = process.env.DEBUG_OUTLINE === "1";
+const OUTLINE_USE_JSON_SCHEMA = process.env.OUTLINE_USE_JSON_SCHEMA !== "0"; // set to "0" to force json_object for outline calls
+const OUTLINE_TOTAL_BUDGET_MS = parseInt(process.env.OUTLINE_TOTAL_BUDGET_MS || "120000", 10); // 2 minutes
+const OUTLINE_CALL_TIMEOUT_MS = parseInt(process.env.OUTLINE_CALL_TIMEOUT_MS || "45000", 10); // 45 seconds per outline call
+const DEFAULT_JSON_CALL_TIMEOUT_MS = parseInt(process.env.DEFAULT_JSON_CALL_TIMEOUT_MS || "60000", 10); // 60 seconds
+const DEFAULT_TEXT_CALL_TIMEOUT_MS = parseInt(process.env.DEFAULT_TEXT_CALL_TIMEOUT_MS || "90000", 10); // 90 seconds
+
 // ---------- Helpers for OpenAI calls ----------
 
 type ChatOptions = {
   model?: string;
   temperature?: number;
   max_tokens?: number;
+  // non-breaking extras:
+  schema_name?: string; // json_schema name
+  request_tag?: string; // used for debug logging
+  timeout_ms?: number; // per-request timeout (OpenAI SDK request option)
+  max_retries?: number; // overrides SDK retries (default is 2; we want 0 for Vercel safety)
+  debug?: boolean; // verbose logs
   // forward-compatible extras
   [key: string]: any;
 };
+
+function nowMs() {
+  return Date.now();
+}
+
+function timeLeftMs(deadlineMs: number) {
+  return deadlineMs - nowMs();
+}
+
+function extractUsage(completion: any) {
+  return completion?.usage ?? (completion as any)?.usage ?? null;
+}
+
+function extractMsgContent(choice: any): string {
+  const content = choice?.message?.content ?? "";
+  if (typeof content === "string") return content;
+  // Some SDKs can return array content parts; join text parts if present
+  if (Array.isArray(content)) {
+    return content
+      .map((p: any) => {
+        if (typeof p === "string") return p;
+        if (p?.type === "text" && typeof p?.text === "string") return p.text;
+        if (typeof p?.text === "string") return p.text;
+        return "";
+      })
+      .join("");
+  }
+  return String(content ?? "");
+}
+
+function stripCodeFences(s: string) {
+  let t = (s ?? "").trim();
+  if (t.startsWith("```json")) t = t.slice(7).trim();
+  if (t.startsWith("```")) t = t.slice(3).trim();
+  if (t.endsWith("```")) t = t.slice(0, -3).trim();
+  return t;
+}
+
+function looksTruncatedJson(raw: string) {
+  const t = (raw ?? "").trim();
+  if (!t) return false;
+
+  // If it begins like JSON but doesn't end like JSON, it's likely cut off
+  if (t.startsWith("{") && !t.endsWith("}")) return true;
+  if (t.startsWith("[") && !t.endsWith("]")) return true;
+
+  // Heuristic: unbalanced braces
+  const opens = (t.match(/{/g) || []).length;
+  const closes = (t.match(/}/g) || []).length;
+  if (opens > closes) return true;
+
+  const opensA = (t.match(/\[/g) || []).length;
+  const closesA = (t.match(/\]/g) || []).length;
+  if (opensA > closesA) return true;
+
+  return false;
+}
 
 async function callOpenAI(
   prompt: string,
@@ -48,12 +119,16 @@ async function callOpenAI(
   // JSON-oriented helper (use for outlines, budgets, etc.)
   const openai = getOpenAI();
 
-  const completion = await openai.chat.completions.create({
-    model: options.model || MODEL_JSON,
-    messages: [
-      {
-        role: "system",
-        content: `
+  const timeout = typeof options.timeout_ms === "number" ? options.timeout_ms : DEFAULT_JSON_CALL_TIMEOUT_MS;
+  const maxRetries = typeof options.max_retries === "number" ? options.max_retries : 0; // ✅ IMPORTANT: avoid hidden retry time on Vercel
+
+  const completion = await openai.chat.completions.create(
+    {
+      model: options.model || MODEL_JSON,
+      messages: [
+        {
+          role: "system",
+          content: `
 You are an expert film development AI.
 
 **When generating scripts**, produce JSON like:
@@ -166,23 +241,26 @@ Always fill imagePrompt with a short visual description. Leave imageUrl empty.
 
 Always produce valid JSON without extra commentary or markdown (e.g., no \`\`\`json).
 `,
-      },
-      { role: "user", content: prompt },
-    ],
-    temperature: options.temperature ?? 0.7,
-    response_format: { type: "json_object" },
-    max_tokens: options.max_tokens ?? 4096,
-    ...options,
-  });
+        },
+        { role: "user", content: prompt },
+      ],
+      temperature: options.temperature ?? 0.7,
+      response_format: { type: "json_object" },
+      max_tokens: options.max_tokens ?? 4096,
+      ...options,
+    },
+    { timeout, maxRetries }
+  );
 
-  let content = completion.choices[0].message.content ?? "";
-  content = content.trim();
-  if (content.startsWith("```json")) content = content.slice(7);
-  if (content.endsWith("```")) content = content.slice(0, -3);
+  const choice = completion.choices[0];
+  let content = extractMsgContent(choice) ?? "";
+  content = stripCodeFences(content);
+
+  const finish = choice.finish_reason || "stop";
 
   return {
     content: content.trim(),
-    finish_reason: completion.choices[0].finish_reason || "stop",
+    finish_reason: finish,
   };
 }
 
@@ -193,12 +271,16 @@ async function callOpenAIText(
   // Text-only helper (use for screenplay chunks). No JSON formatting pressure.
   const openai = getOpenAI();
 
-  const completion = await openai.chat.completions.create({
-    model: options.model || MODEL_TEXT,
-    messages: [
-      {
-        role: "system",
-        content: `
+  const timeout = typeof options.timeout_ms === "number" ? options.timeout_ms : DEFAULT_TEXT_CALL_TIMEOUT_MS;
+  const maxRetries = typeof options.max_retries === "number" ? options.max_retries : 0; // ✅ IMPORTANT: avoid hidden retry time on Vercel
+
+  const completion = await openai.chat.completions.create(
+    {
+      model: options.model || MODEL_TEXT,
+      messages: [
+        {
+          role: "system",
+          content: `
 You are a professional screenwriter. Output ONLY screenplay text in **Fountain** format.
 
 STRICT READABILITY / PACING RULES (very important):
@@ -213,30 +295,43 @@ FORMAT RULES:
 - Do NOT add meta headers like "PART 1" or "CHUNK 2".
 - Continue seamlessly with proper scene headings.
 `,
-      },
-      { role: "user", content: prompt },
-    ],
-    temperature: options.temperature ?? 0.85, // Higher temp for more creative expansion
-    max_tokens: options.max_tokens ?? 4096,
-    ...options,
-  });
+        },
+        { role: "user", content: prompt },
+      ],
+      temperature: options.temperature ?? 0.85, // Higher temp for more creative expansion
+      max_tokens: options.max_tokens ?? 4096,
+      ...options,
+    },
+    { timeout, maxRetries }
+  );
 
-  const msg = completion.choices[0].message;
+  const choice = completion.choices[0];
+  const msg = choice.message;
+
   return {
-    content: (msg.content ?? "").trim(),
-    finish_reason: completion.choices[0].finish_reason || "stop",
+    content: (extractMsgContent({ message: msg }) ?? "").trim(),
+    finish_reason: choice.finish_reason || "stop",
   };
 }
 
 /**
- * ✅ Structured Outputs helper for schema-locked JSON (used ONLY for outlines).
- * Falls back to older JSON mode if schema format is not supported (or throws).
+ * ✅ Structured Outputs helper for schema-locked JSON (used for outlines + chunk plans).
+ * - Adds finish_reason/content length logging (DEBUG_OUTLINE).
+ * - Treats finish_reason === "length" as failure (prevents parsing truncated JSON).
+ * - Disables SDK retries by default (maxRetries: 0) to avoid Vercel timeout spirals.
+ * - Allows forcing json_object mode via OUTLINE_USE_JSON_SCHEMA=0 or options.force_json_object.
  */
 async function callOpenAIJsonSchema<T>(
   prompt: string,
   jsonSchema: any,
   options: ChatOptions = {}
-): Promise<{ data: T | null; content: string; finish_reason: string; used_schema: boolean }> {
+): Promise<{
+  data: T | null;
+  content: string;
+  finish_reason: string;
+  used_schema: boolean;
+  meta?: { content_len: number; usage: any; finish_reason: string };
+}> {
   const openai = getOpenAI();
 
   const messages = [
@@ -248,45 +343,96 @@ async function callOpenAIJsonSchema<T>(
     { role: "user" as const, content: prompt },
   ];
 
-  try {
-    const completion = await openai.chat.completions.create({
-      model: options.model || MODEL_JSON,
-      messages,
-      temperature: options.temperature ?? 0.35,
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "FilmOutline",
-          schema: jsonSchema,
-          strict: true,
+  const schemaName = (options.schema_name as string) || "FilmJSON";
+  const tag = (options.request_tag as string) || "jsonschema";
+  const debug = Boolean(options.debug) || DEBUG_OUTLINE;
+
+  const timeout =
+    typeof options.timeout_ms === "number"
+      ? options.timeout_ms
+      : // outline & schema calls should be quicker than text calls
+        (tag.startsWith("outline") ? OUTLINE_CALL_TIMEOUT_MS : DEFAULT_JSON_CALL_TIMEOUT_MS);
+
+  const maxRetries = typeof options.max_retries === "number" ? options.max_retries : 0;
+
+  const wantSchema = OUTLINE_USE_JSON_SCHEMA && options.force_json_object !== true;
+
+  // Try schema mode first (if enabled)
+  if (wantSchema) {
+    try {
+      const completion = await openai.chat.completions.create(
+        {
+          model: options.model || MODEL_JSON,
+          messages,
+          temperature: options.temperature ?? 0.35,
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: schemaName,
+              schema: jsonSchema,
+              strict: true,
+            },
+          },
+          max_tokens: options.max_tokens ?? 4500,
+          ...options,
         },
-      },
-      max_tokens: options.max_tokens ?? 4500,
-      ...options,
-    });
+        { timeout, maxRetries }
+      );
 
-    let content = completion.choices[0].message.content ?? "";
-    content = content.trim();
-    if (content.startsWith("```json")) content = content.slice(7);
-    if (content.endsWith("```")) content = content.slice(0, -3);
+      const choice = completion.choices[0];
+      const finish = choice.finish_reason || "stop";
+      let content = stripCodeFences(extractMsgContent(choice) ?? "");
 
-    const data = safeParse<T>(content, "outline-json_schema");
-    return {
-      data,
-      content: content.trim(),
-      finish_reason: completion.choices[0].finish_reason || "stop",
-      used_schema: true,
-    };
-  } catch (err) {
-    // Fallback: JSON mode
-    const { content, finish_reason } = await callOpenAI(prompt, {
-      ...options,
-      temperature: options.temperature ?? 0.35,
-      max_tokens: options.max_tokens ?? 4500,
-    });
-    const data = safeParse<T>(content, "outline-json_object-fallback");
-    return { data, content, finish_reason, used_schema: false };
+      const usage = extractUsage(completion);
+      const meta = { content_len: content.length, usage, finish_reason: finish };
+
+      if (debug) {
+        console.log(
+          `[${tag}] used_schema=true finish=${finish} chars=${content.length} usage=${
+            usage ? JSON.stringify(usage) : "n/a"
+          }`
+        );
+      }
+
+      // ✅ If model hit length, JSON is very likely cut off → treat as failure
+      if (finish === "length" || looksTruncatedJson(content)) {
+        if (debug) console.log(`[${tag}] detected truncation (finish=length or incomplete JSON).`);
+        return { data: null, content: content.trim(), finish_reason: finish, used_schema: true, meta };
+      }
+
+      const data = safeParse<T>(content, `${tag}-json_schema`);
+      return {
+        data,
+        content: content.trim(),
+        finish_reason: finish,
+        used_schema: true,
+        meta,
+      };
+    } catch (err) {
+      if (debug) console.log(`[${tag}] schema call threw; falling back to json_object.`, err);
+      // fall through to json_object fallback below
+    }
   }
+
+  // Fallback: JSON mode
+  const { content, finish_reason } = await callOpenAI(prompt, {
+    ...options,
+    temperature: options.temperature ?? 0.35,
+    max_tokens: options.max_tokens ?? 4500,
+    timeout_ms: timeout,
+    max_retries: maxRetries,
+  });
+
+  const data = safeParse<T>(content, `${tag}-json_object-fallback`);
+  const meta = { content_len: content.length, usage: null, finish_reason };
+
+  if (debug) {
+    console.log(
+      `[${tag}] used_schema=false finish=${finish_reason} chars=${content.length} usage=n/a`
+    );
+  }
+
+  return { data, content, finish_reason, used_schema: false, meta };
 }
 
 // ---------- Types ----------
@@ -347,16 +493,34 @@ function tail(text: string, maxChars = 4000) {
   return text.length > maxChars ? text.slice(-maxChars) : text;
 }
 
+/**
+ * ✅ safer JSON parse:
+ * - detects likely truncation and returns null (prevents "partial object" mis-parse)
+ * - strips fences
+ * - attempts best-effort extraction of largest {...} object
+ */
 function safeParse<T = any>(raw: string, tag = "json"): T | null {
   try {
-    return JSON.parse(raw) as T;
+    const cleaned = stripCodeFences(String(raw ?? ""));
+
+    // If the content begins as JSON but ends incomplete, treat as truncation
+    if (looksTruncatedJson(cleaned)) {
+      console.error(`safeParse failed [${tag}] likely truncated len=${cleaned.length}`);
+      return null;
+    }
+
+    return JSON.parse(cleaned) as T;
   } catch (e) {
-    const i = raw.indexOf("{");
-    const j = raw.lastIndexOf("}");
+    const str = stripCodeFences(String(raw ?? ""));
+    const i = str.indexOf("{");
+    const j = str.lastIndexOf("}");
     if (i >= 0 && j > i) {
-      try {
-        return JSON.parse(raw.slice(i, j + 1)) as T;
-      } catch {}
+      const candidate = str.slice(i, j + 1).trim();
+      if (!looksTruncatedJson(candidate)) {
+        try {
+          return JSON.parse(candidate) as T;
+        } catch {}
+      }
     }
     console.error(`safeParse failed [${tag}] len=${raw?.length}`, e);
     return null;
@@ -589,6 +753,20 @@ function buildScenesOnlySchema(sceneCap: number) {
   };
 }
 
+function buildActScenesSchema(sceneCount: number) {
+  // Same object shape as ShortScriptItem, but we’ll renumber globally after merging.
+  return buildScenesOnlySchema(sceneCount);
+}
+
+function makePlaceholderScenes(count: number, act: 1 | 2 | 3) {
+  return Array.from({ length: count }, (_, i) => ({
+    act,
+    sceneNumber: i + 1,
+    heading: i % 2 === 0 ? "INT. LOCATION - DAY" : "EXT. LOCATION - NIGHT",
+    summary: `Act ${act} beat placeholder. Expand during writing; escalate conflict and maintain continuity.`,
+  })) as ShortScriptItem[];
+}
+
 async function repairOutlineJson(params: {
   raw: string;
   sceneCap: number;
@@ -622,9 +800,165 @@ ${raw}
   const repaired = await callOpenAIJsonSchema<OutlineResult>(prompt, schema, {
     temperature: 0.2,
     max_tokens: 3200,
+    request_tag: "outline-repair",
+    schema_name: "OutlineRepair",
+    timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
+    max_retries: 0,
   });
 
   return repaired.data;
+}
+
+/**
+ * ✅ NEW: Act-splitting scenes (3 small calls) to prevent huge JSON truncation.
+ * This is now the primary method for features (targetPages >= 45).
+ */
+async function getActSplitOutline(params: {
+  idea: string;
+  genre: string;
+  targetPages: number;
+  sceneCap: number;
+  synopsisLength: string;
+  longForm: boolean;
+  summaryRule: string;
+  summaryWordSpec: string;
+  deadlineMs: number;
+}): Promise<OutlineResult | null> {
+  const { idea, genre, targetPages, sceneCap, synopsisLength, longForm, summaryRule, summaryWordSpec, deadlineMs } =
+    params;
+
+  if (timeLeftMs(deadlineMs) < 25_000) return null;
+
+  const actSummaryWords = targetPages >= 60 ? "110–150 words" : "140–190 words";
+
+  const actPrompt = `
+Create act-level summaries for a ${genre} film from this idea:
+${idea}
+
+Constraints:
+- 3 acts only.
+- Act summaries should be ${actSummaryWords}.
+- Themes 3–5 items.
+- Synopsis target length: ${synopsisLength}.
+Return JSON with {logline, synopsis, themes, acts:[{act, summary}]}.
+`.trim();
+
+  const actsRes = await callOpenAIJsonSchema<{
+    logline: string;
+    synopsis: string;
+    themes: string[];
+    acts: { act: number; summary: string }[];
+  }>(actPrompt, buildActsSchema(), {
+    temperature: 0.3,
+    max_tokens: 2400,
+    request_tag: "outline-acts",
+    schema_name: "OutlineActs",
+    timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
+    max_retries: 0,
+    debug: true, // ✅ log finish_reason/len for confirmation
+  });
+
+  const actsParsed = actsRes.data;
+
+  if (!actsParsed?.acts?.length || actsParsed.acts.length !== 3) return null;
+
+  // Scene allocation (keep Act 2 longest, deterministic, sums to sceneCap)
+  const act1 = clamp(Math.round(sceneCap * 0.25), 10, Math.max(10, sceneCap - 22));
+  const act2 = clamp(Math.round(sceneCap * 0.5), 14, Math.max(14, sceneCap - act1 - 8));
+  const act3 = Math.max(8, sceneCap - act1 - act2);
+
+  const counts: Array<{ act: 1 | 2 | 3; count: number; summary: string }> = [
+    { act: 1, count: act1, summary: actsParsed.acts.find((a) => a.act === 1)?.summary || "" },
+    { act: 2, count: act2, summary: actsParsed.acts.find((a) => a.act === 2)?.summary || "" },
+    { act: 3, count: act3, summary: actsParsed.acts.find((a) => a.act === 3)?.summary || "" },
+  ];
+
+  const all: ShortScriptItem[] = [];
+
+  for (const a of counts) {
+    if (timeLeftMs(deadlineMs) < 22_000) {
+      // bail out: keep pipeline alive
+      all.push(...makePlaceholderScenes(a.count, a.act));
+      continue;
+    }
+
+    // Two attempts per act: second attempt is “extreme compact”
+    let actScenes: ShortScriptItem[] | null = null;
+
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const compactRule =
+        attempt === 1
+          ? `${summaryRule} Keep each summary ${summaryWordSpec}.`
+          : `EXTREME COMPACT: summaries 10–16 words max, concrete verbs, no clauses.`;
+
+      const prompt = `
+Using the act summary below, generate EXACTLY ${a.count} shortScript scene beats for ACT ${a.act}.
+
+Rules:
+- shortScript MUST be exactly ${a.count} items.
+- Each item must have:
+  - act: MUST be ${a.act} for every item
+  - sceneNumber: sequential starting at 1 (within this act)
+  - heading: proper slug line like "INT. LOCATION - DAY" (uppercase)
+  - summary: action beat (${longForm ? "compact" : "detailed"}) 
+- ${compactRule}
+- NO extra keys. NO markdown.
+
+MOVIE IDEA:
+${idea}
+
+ACT ${a.act} SUMMARY:
+${a.summary}
+`.trim();
+
+      const res = await callOpenAIJsonSchema<{ shortScript: ShortScriptItem[] }>(
+        prompt,
+        buildActScenesSchema(a.count),
+        {
+          temperature: attempt === 2 ? 0.22 : 0.28,
+          max_tokens: attempt === 2 ? 1600 : 2100,
+          request_tag: `outline-act${a.act}-scenes-a${attempt}`,
+          schema_name: `OutlineAct${a.act}Scenes`,
+          timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
+          max_retries: 0,
+          debug: true, // ✅ log finish_reason/len for confirmation
+        }
+      );
+
+      if (res.data?.shortScript?.length === a.count) {
+        actScenes = res.data.shortScript.map((s, idx) => ({
+          ...s,
+          act: a.act,
+          sceneNumber: idx + 1,
+          heading: String(s.heading || "").trim() || (idx % 2 === 0 ? "INT. LOCATION - DAY" : "EXT. LOCATION - NIGHT"),
+          summary: String(s.summary || "").trim() || "To be expanded during writing.",
+        }));
+        break;
+      }
+    }
+
+    if (!actScenes) actScenes = makePlaceholderScenes(a.count, a.act);
+    all.push(...actScenes);
+  }
+
+  // Normalize to exact sceneCap, renumber globally
+  const merged = all.slice(0, sceneCap);
+  while (merged.length < sceneCap) {
+    merged.push(...makePlaceholderScenes(Math.min(3, sceneCap - merged.length), 2));
+  }
+
+  const normalized = merged.map((s, idx) => ({
+    ...s,
+    sceneNumber: idx + 1,
+    act: (s.act as any) || (idx < Math.floor(sceneCap * 0.25) ? 1 : idx < Math.floor(sceneCap * 0.75) ? 2 : 3),
+  }));
+
+  return {
+    logline: actsParsed.logline || "",
+    synopsis: actsParsed.synopsis || "",
+    themes: actsParsed.themes || [],
+    shortScript: normalized,
+  };
 }
 
 async function getRobustOutline(params: {
@@ -636,6 +970,9 @@ async function getRobustOutline(params: {
 }): Promise<OutlineResult> {
   const { idea, genre, targetPages, approxScenes, synopsisLength } = params;
 
+  const start = nowMs();
+  const deadline = start + OUTLINE_TOTAL_BUDGET_MS;
+
   const baseSceneCap = computeSceneCap(targetPages, approxScenes);
 
   // ✅ For long scripts: keep summaries compact so outline step is fast + reliable.
@@ -646,10 +983,48 @@ async function getRobustOutline(params: {
 
   const summaryWordSpec = longForm ? "12–22 words" : "25–45 words";
 
-  // ---- Primary path: schema-locked full outline ----
-  // ✅ Reduce attempts slightly to avoid outline being the bottleneck.
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const sceneCap = Math.max(12, baseSceneCap - (attempt - 1) * 8);
+  // ✅ If budget is already tight, bail early with a minimal outline
+  if (timeLeftMs(deadline) < 25_000) {
+    const fallbackLen = Math.max(12, Math.min(40, baseSceneCap));
+    return {
+      logline: "",
+      synopsis: "",
+      themes: [],
+      shortScript: Array.from({ length: fallbackLen }, (_, i) => ({
+        act: i < Math.floor(fallbackLen * 0.25) ? 1 : i < Math.floor(fallbackLen * 0.75) ? 2 : 3,
+        sceneNumber: i + 1,
+        heading: i % 2 === 0 ? "INT. LOCATION - DAY" : "EXT. LOCATION - NIGHT",
+        summary: "To be expanded during writing. Maintain continuity and escalate stakes.",
+      })),
+    };
+  }
+
+  // ✅ PRIMARY FIX: For features (>=45 pages), use Act-splitting to avoid giant JSON truncation.
+  if (targetPages >= 45) {
+    const sceneCap = baseSceneCap;
+
+    const split = await getActSplitOutline({
+      idea,
+      genre,
+      targetPages,
+      sceneCap,
+      synopsisLength,
+      longForm,
+      summaryRule,
+      summaryWordSpec,
+      deadlineMs: deadline,
+    });
+
+    if (split?.shortScript?.length === sceneCap) return split;
+
+    // If act-splitting fails (rare), keep going to smaller single-call attempts below.
+  }
+
+  // ---- Secondary path: schema-locked full outline (only for smaller scripts or as backup) ----
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    if (timeLeftMs(deadline) < 25_000) break;
+
+    const sceneCap = Math.max(12, baseSceneCap - (attempt - 1) * 10);
 
     const prompt = `
 Generate a detailed film outline for a ${genre} film based on this idea:
@@ -673,6 +1048,11 @@ Synopsis length target: ${synopsisLength}
     const res = await callOpenAIJsonSchema<OutlineResult>(prompt, schema, {
       temperature: 0.33,
       max_tokens: 4200,
+      request_tag: `outline-full-a${attempt}`,
+      schema_name: "OutlineFull",
+      timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
+      max_retries: 0,
+      debug: true, // ✅ logs finish_reason/len so you can confirm truncation
     });
 
     const parsed = res.data;
@@ -691,7 +1071,8 @@ Synopsis length target: ${synopsisLength}
       return parsed;
     }
 
-    if (!parsed && res.content && res.content.length > 50) {
+    // Try repair once if we got content back
+    if (!parsed && res.content && res.content.length > 50 && timeLeftMs(deadline) > 20_000) {
       const repaired = await repairOutlineJson({
         raw: res.content,
         sceneCap,
@@ -705,62 +1086,6 @@ Synopsis length target: ${synopsisLength}
         repaired.shortScript = repaired.shortScript.map((s, idx) => ({ ...s, sceneNumber: idx + 1 }));
         return repaired;
       }
-    }
-  }
-
-  // ---- Fallback path: acts -> scenes (both schema-locked) ----
-  const actSummaryWords = targetPages >= 60 ? "120–160 words" : "180–220 words";
-
-  const actPrompt = `
-Create act-level summaries for a ${genre} film from this idea:
-${idea}
-
-Constraints:
-- 3 acts only.
-- Act summaries should be ${actSummaryWords}.
-- Themes 3–5 items.
-- Synopsis target length: ${synopsisLength}.
-`.trim();
-
-  const actsRes = await callOpenAIJsonSchema<{
-    logline: string;
-    synopsis: string;
-    themes: string[];
-    acts: { act: number; summary: string }[];
-  }>(actPrompt, buildActsSchema(), { temperature: 0.3, max_tokens: 2400 });
-
-  const actsParsed = actsRes.data;
-
-  if (actsParsed?.acts?.length === 3) {
-    const sceneCap = baseSceneCap;
-
-    const scenesPrompt = `
-Using the act summaries below, produce EXACTLY ${sceneCap} shortScript scene beats.
-
-Rules:
-- sceneNumber sequential starting at 1
-- Use proper headings like "INT. ... - DAY"
-- Provide ${longForm ? "compact" : "detailed"} summaries (${longForm ? "12–22 words" : "25–40 words"}) each.
-- Act 2 is typically longest; distribute scenes realistically.
-
-ACTS_JSON:
-${JSON.stringify(actsParsed)}
-`.trim();
-
-    const scenesRes = await callOpenAIJsonSchema<{ shortScript: ShortScriptItem[] }>(
-      scenesPrompt,
-      buildScenesOnlySchema(sceneCap),
-      { temperature: 0.28, max_tokens: 3600 }
-    );
-
-    if (scenesRes.data?.shortScript?.length === sceneCap) {
-      const normalized = scenesRes.data.shortScript.map((s, idx) => ({ ...s, sceneNumber: idx + 1 }));
-      return {
-        logline: actsParsed.logline || "",
-        synopsis: actsParsed.synopsis || "",
-        themes: actsParsed.themes || [],
-        shortScript: normalized,
-      };
     }
   }
 
@@ -863,6 +1188,10 @@ ${c.beats}
   const res = await callOpenAIJsonSchema<{ chunks: ChunkPlan[] }>(prompt, buildChunkPlanSchema(chunks.length), {
     temperature: 0.2,
     max_tokens: 1800,
+    request_tag: "chunk-bible",
+    schema_name: "ChunkBible",
+    timeout_ms: DEFAULT_JSON_CALL_TIMEOUT_MS,
+    max_retries: 0,
   });
 
   if (res.data?.chunks?.length === chunks.length) return res.data.chunks;
@@ -969,7 +1298,7 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
 
   // --- PATH B: Feature scripts (Parallel chunk writing, concurrency-capped, retry-safe) ---
 
-  // 1) Outline (schema-locked)
+  // 1) Outline (now act-splitting primary for features; schema-locked, budget-limited)
   const outlineParsed = await getRobustOutline({
     idea,
     genre,
@@ -1083,6 +1412,8 @@ ${chunk.beats}
       const { content } = await callOpenAIText(chunkPrompt, {
         temperature: temp,
         max_tokens: maxTokensPerChunk,
+        timeout_ms: DEFAULT_TEXT_CALL_TIMEOUT_MS,
+        max_retries: 0,
       });
 
       const cleaned = (content || "").trim();
