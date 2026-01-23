@@ -404,7 +404,8 @@ function parseLengthToMinutes(raw: string): number {
   return 5;
 }
 
-function compactBeatsForPrompt(scenes: ShortScriptItem[], maxItems = 30) {
+function compactBeatsForPrompt(scenes: ShortScriptItem[], maxItems = 24) {
+  // ✅ Step 2 fix: keep prompts small (faster + reduces truncation)
   if (!scenes?.length) return "(No beats available for this chunk.)";
   const slice = scenes.slice(0, maxItems);
   const lines = slice.map((s) => {
@@ -831,7 +832,10 @@ Enforcement:
 === META ===
 ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, themes: meta.themes }, null, 2)}
 `;
-    const { content: scriptText } = await callOpenAIText(writePrompt, { temperature: 0.8, max_tokens: 4096 });
+    const { content: scriptText } = await callOpenAIText(writePrompt, {
+      temperature: 0.8,
+      max_tokens: 4096,
+    });
 
     return {
       logline: meta.logline,
@@ -855,22 +859,27 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
   const wordsPerPage = 220;
 
   /**
-   * ✅ Step 2: Speed + 300s timeout protection
-   * Use larger chunks for feature scripts to reduce total OpenAI calls.
+   * ✅ Step 2: 300s timeout protection (reduce total OpenAI calls HARD)
+   * Goal:
+   * - 60 pages → ~3 calls total (2 chunks + 1 expansion max)
+   * - 120 pages → ~5 calls total (4 chunks + 1 expansion max)
    */
   const pagesPerChunk =
-    targetPages >= 110 ? 12 :
-    targetPages >= 90 ? 11 :
-    targetPages >= 60 ? 10 :
-    targetPages >= 35 ? 7 :
-    6;
+    targetPages >= 90 ? 30 : // 90–120 => 3–4 chunks
+    targetPages >= 60 ? 25 : // 60–89  => 3–4 chunks
+    targetPages >= 35 ? 15 : // 35–59  => 3–4 chunks
+    8; // 16–34
 
   const numChunks = Math.ceil(targetPages / pagesPerChunk);
 
-  // Max tokens: larger for features to get more pages per call.
-  const chunkMaxTokens = targetPages >= 60 ? 8192 : 4096;
+  // Bigger outputs for big chunks (keeps chunks from under-shooting)
+  const chunkMaxTokens =
+    pagesPerChunk >= 30 ? 12000 :
+    pagesPerChunk >= 25 ? 11000 :
+    pagesPerChunk >= 15 ? 9000 :
+    4096;
 
-  // Vercel hard timeout is 300s; we stop earlier to return JSON safely.
+  // Vercel hard timeout is 300s; stop earlier to return safely.
   const HARD_TIME_LIMIT_MS = 260_000;
   const startedAt = Date.now();
   const timeOk = () => Date.now() - startedAt < HARD_TIME_LIMIT_MS;
@@ -883,8 +892,8 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
   // Base on actual outline length (Step 1 caps scenes)
   const effectiveScenes = Math.max(1, shortScript.length || approxScenes);
 
-  // Very strict loop bound for speed
-  const maxChunkLoops = Math.min(numChunks + 2, 20);
+  // Strict loop bound: no runaway loops
+  const maxChunkLoops = Math.min(numChunks, 6); // never more than 6 chunks (even if params go wild)
 
   while (timeOk() && pageEstimate < targetPages - 2 && chunkIndex < maxChunkLoops) {
     const startScene = Math.floor(chunkIndex * (effectiveScenes / numChunks)) + 1;
@@ -894,18 +903,17 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     );
     const chunkScenes = shortScript.slice(startScene - 1, endScene);
 
-    const beats = compactBeatsForPrompt(chunkScenes, 35);
-
+    const beats = compactBeatsForPrompt(chunkScenes, 24);
     const isStart = !previousChunkTail;
 
-    // Smaller context tail for features = faster + fewer prompt tokens
+    // Smaller context tail for speed
     const contextTail = previousChunkTail || "(Script start)";
 
     const continuationPrompt = `
 Write approximately ${pagesPerChunk} pages of screenplay in **Fountain format**.
 1 page ≈ ${wordsPerPage} words. Output screenplay text ONLY.
 
-${isStart ? `Start from scratch. Include "FADE IN:" and the first scene heading.` : `Continue seamlessly from the prior text.`}
+${isStart ? `Start from scratch. Include "FADE IN:" and the first scene heading.` : `Continue seamlessly from the prior text. Do NOT repeat any lines.`}
 
 Enforcement:
 - Slug lines often (INT./EXT.)
@@ -915,9 +923,9 @@ Enforcement:
 
 Chunk target:
 - Start around scene ${startScene} and continue through scene ${endScene}
-- If you finish early, continue logically into the next beats.
+- If you finish early, keep going into the next logical beats.
 
-RECENT CONTEXT:
+RECENT CONTEXT (do not repeat):
 ${contextTail}
 
 BEATS (follow these in order, expand into full scenes):
@@ -935,28 +943,25 @@ ${beats}
     scriptFountain += (scriptFountain ? "\n\n" : "") + chunkText;
     pageEstimate = estimatePagesFromText(scriptFountain, wordsPerPage);
 
-    // Smaller tail for speed + prevents huge prompts
-    previousChunkTail = tail(scriptFountain, targetPages >= 60 ? 2200 : 4000);
+    // Small tail = fast prompts
+    previousChunkTail = tail(scriptFountain, targetPages >= 60 ? 1800 : 2600);
     chunkIndex++;
 
     // Safety: avoid massive overshoot
-    if (pageEstimate > targetPages + 10) break;
+    if (pageEstimate > targetPages + 12) break;
   }
 
   /**
-   * ✅ Step 2: Controlled expansion (few calls max)
-   * Fill missing pages without many tiny calls.
+   * ✅ Step 2: Controlled expansion (MAX 1 extra call for features)
    */
-  let guardPass = 0;
-  const minTarget = Math.round(targetPages * 0.92);
+  const minTarget = Math.round(targetPages * 0.9);
 
-  while (timeOk() && pageEstimate < minTarget && guardPass < 3) {
+  if (timeOk() && pageEstimate < minTarget) {
     const remaining = targetPages - pageEstimate;
-
-    const addPages =
-      targetPages >= 110 ? Math.min(14, Math.max(8, Math.round(remaining * 0.55))) :
-      targetPages >= 60 ? Math.min(12, Math.max(7, Math.round(remaining * 0.55))) :
-      Math.min(10, Math.max(5, Math.round(remaining * 0.5)));
+    const addPages = Math.min(
+      targetPages >= 60 ? 12 : 10,
+      Math.max(6, Math.round(remaining * 0.6))
+    );
 
     const expansionPrompt = `
 Continue the screenplay from the RECENT CONTEXT below.
@@ -979,16 +984,15 @@ ${previousChunkTail}
 
     const expansion = await callOpenAIText(expansionPrompt, {
       temperature: 0.86,
-      max_tokens: chunkMaxTokens,
+      max_tokens: Math.max(7000, Math.min(12000, chunkMaxTokens)),
     });
 
     const addText = (expansion.content || "").trim();
-    if (!addText) break;
-
-    scriptFountain += "\n\n" + addText;
-    pageEstimate = estimatePagesFromText(scriptFountain, wordsPerPage);
-    previousChunkTail = tail(scriptFountain, targetPages >= 60 ? 2200 : 4000);
-    guardPass++;
+    if (addText) {
+      scriptFountain += "\n\n" + addText;
+      pageEstimate = estimatePagesFromText(scriptFountain, wordsPerPage);
+      previousChunkTail = tail(scriptFountain, targetPages >= 60 ? 1800 : 2600);
+    }
   }
 
   return {
