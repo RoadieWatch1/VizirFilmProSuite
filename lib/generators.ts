@@ -53,7 +53,7 @@ type ChatOptions = {
   max_completion_tokens?: number;
   max_tokens?: number; // alias (never forwarded)
 
-  // Supported OpenAI params (optional)
+  // Supported  params (optional)
   top_p?: number;
   presence_penalty?: number;
   frequency_penalty?: number;

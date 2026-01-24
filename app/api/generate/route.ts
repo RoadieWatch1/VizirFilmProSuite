@@ -1,3 +1,4 @@
+// C:\Users\vizir\VizirPro\app\api\generate\route.ts
 import { NextRequest, NextResponse } from "next/server";
 import {
   generateScript,
@@ -62,11 +63,43 @@ function countScenes(text: string): number {
   return (text.match(/^(?:INT\.|EXT\.|INT\/EXT\.|EXT\/INT\.)/gim) || []).length;
 }
 
-async function generateScriptData(
-  movieIdea: string,
-  movieGenre: string,
-  scriptLength: string
-) {
+function normalizeOpenAIError(error: any): { status: number; message: string; hint?: string } {
+  const msg = String(error?.message || "");
+  const code = String(error?.code || error?.error?.code || "");
+  const status = Number(error?.status || error?.response?.status || 500);
+
+  // ✅ Model access / not found
+  if (
+    code === "model_not_found" ||
+    msg.includes("does not have access to model") ||
+    msg.includes("model_not_found")
+  ) {
+    return {
+      status: 400,
+      message: msg || "Your OpenAI project does not have access to the requested model.",
+      hint:
+        "Fix: set Vercel env vars OPENAI_MODEL_TEXT and OPENAI_MODEL_JSON to a model your project has access to (ex: gpt-4o-mini).",
+    };
+  }
+
+  // ✅ Wrong token param
+  if (msg.includes("Unsupported parameter") && msg.includes("max_tokens")) {
+    return {
+      status: 400,
+      message: msg,
+      hint:
+        "Fix: remove max_tokens from API calls and use max_completion_tokens instead. Search your repo for `max_tokens:` and replace.",
+    };
+  }
+
+  // Fall back
+  return {
+    status: status >= 400 && status <= 599 ? status : 500,
+    message: msg || "Unknown error",
+  };
+}
+
+async function generateScriptData(movieIdea: string, movieGenre: string, scriptLength: string) {
   const minutes = parseDurationToMinutes(scriptLength);
   const normalizedLength = `${minutes} min`;
 
@@ -129,15 +162,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const {
-      movieIdea,
-      movieGenre,
-      scriptLength,
-      step,
-      script,
-      scriptContent,
-      characters,
-    } = body || {};
+    const { movieIdea, movieGenre, scriptLength, step, script, scriptContent, characters } = body || {};
 
     console.log("Received request:", {
       movieIdea: !!movieIdea,
@@ -152,9 +177,7 @@ export async function POST(request: NextRequest) {
 
     if (
       !movieIdea &&
-      !["storyboard", "schedule", "locations", "sound", "characters", "concept", "budget"].includes(
-        step
-      )
+      !["storyboard", "schedule", "locations", "sound", "characters", "concept", "budget"].includes(step)
     ) {
       return NextResponse.json(
         { error: "Movie idea and genre are required for script generation." },
@@ -177,10 +200,7 @@ export async function POST(request: NextRequest) {
 
       case "concept": {
         if (!script) {
-          return NextResponse.json(
-            { error: "Script is required for generating concept." },
-            { status: 400 }
-          );
+          return NextResponse.json({ error: "Script is required for generating concept." }, { status: 400 });
         }
         const result = await generateConcept(script, movieGenre || "");
         return NextResponse.json(result);
@@ -236,10 +256,7 @@ export async function POST(request: NextRequest) {
 
       case "budget": {
         if (!movieGenre || !scriptLength) {
-          return NextResponse.json(
-            { error: "movieGenre and scriptLength are required for budget." },
-            { status: 400 }
-          );
+          return NextResponse.json({ error: "movieGenre and scriptLength are required for budget." }, { status: 400 });
         }
         const result = await generateBudget(movieGenre, scriptLength);
         return NextResponse.json(result);
@@ -247,10 +264,7 @@ export async function POST(request: NextRequest) {
 
       case "schedule": {
         if (!script || !scriptLength) {
-          return NextResponse.json(
-            { error: "script and scriptLength are required for schedule." },
-            { status: 400 }
-          );
+          return NextResponse.json({ error: "script and scriptLength are required for schedule." }, { status: 400 });
         }
         const result = await generateSchedule(script, scriptLength);
         return NextResponse.json(result);
@@ -258,10 +272,7 @@ export async function POST(request: NextRequest) {
 
       case "locations": {
         if (!script) {
-          return NextResponse.json(
-            { error: "script is required for locations." },
-            { status: 400 }
-          );
+          return NextResponse.json({ error: "script is required for locations." }, { status: 400 });
         }
         const result = await generateLocations(script, movieGenre || "");
         return NextResponse.json(result);
@@ -269,10 +280,7 @@ export async function POST(request: NextRequest) {
 
       case "sound": {
         if (!script) {
-          return NextResponse.json(
-            { error: "script is required for sound assets." },
-            { status: 400 }
-          );
+          return NextResponse.json({ error: "script is required for sound assets." }, { status: 400 });
         }
         const result = await generateSoundAssets(script, movieGenre || "");
         return NextResponse.json(result);
@@ -281,9 +289,7 @@ export async function POST(request: NextRequest) {
       default: {
         if (!movieIdea || !movieGenre || !scriptLength) {
           return NextResponse.json(
-            {
-              error: "movieIdea, movieGenre, and scriptLength are required for script generation.",
-            },
+            { error: "movieIdea, movieGenre, and scriptLength are required for script generation." },
             { status: 400 }
           );
         }
@@ -307,13 +313,18 @@ export async function POST(request: NextRequest) {
       }
     }
   } catch (error: any) {
+    const normalized = normalizeOpenAIError(error);
+
     console.error("[API] Generation error:", error, { input: body || "No input available" });
+
     return NextResponse.json(
       {
-        error: error?.message || "Failed to generate film package. Please try again later.",
+        error: normalized.message || "Failed to generate film package. Please try again later.",
+        hint: normalized.hint,
+        // keep details for debugging (you can remove this in production if you want)
         details: error?.stack || "No stack trace available",
       },
-      { status: 500 }
+      { status: normalized.status || 500 }
     );
   }
 }
