@@ -44,7 +44,14 @@ const DEFAULT_TEXT_CALL_TIMEOUT_MS = parseInt(process.env.DEFAULT_TEXT_CALL_TIME
 type ChatOptions = {
   model?: string;
   temperature?: number;
-  max_tokens?: number;
+
+  /**
+   * ✅ IMPORTANT:
+   * Some models reject `max_tokens` and require `max_completion_tokens`.
+   * We keep `max_tokens` as an alias for your existing code, but we DO NOT send it to OpenAI.
+   */
+  max_completion_tokens?: number;
+  max_tokens?: number; // alias (never forwarded)
 
   // Supported OpenAI params (optional)
   top_p?: number;
@@ -65,13 +72,25 @@ type ChatOptions = {
 function pickCompletionParams(options: ChatOptions) {
   // Only include keys OpenAI accepts — prevents “unknown param” crashes.
   const out: any = {};
+
   if (typeof options.temperature === "number") out.temperature = options.temperature;
-  if (typeof options.max_tokens === "number") out.max_tokens = options.max_tokens;
+
+  // ✅ Use max_completion_tokens (never max_tokens)
+  const mct =
+    typeof options.max_completion_tokens === "number"
+      ? options.max_completion_tokens
+      : typeof options.max_tokens === "number"
+      ? options.max_tokens
+      : undefined;
+
+  if (typeof mct === "number") out.max_completion_tokens = mct;
+
   if (typeof options.top_p === "number") out.top_p = options.top_p;
   if (typeof options.presence_penalty === "number") out.presence_penalty = options.presence_penalty;
   if (typeof options.frequency_penalty === "number") out.frequency_penalty = options.frequency_penalty;
   if (typeof options.seed === "number") out.seed = options.seed;
   if (typeof options.stop === "string" || Array.isArray(options.stop)) out.stop = options.stop;
+
   return out;
 }
 
@@ -106,101 +125,15 @@ function extractMsgContent(choice: any): string {
 
 function stripCodeFences(s: string) {
   let t = (s ?? "").trim();
-  // remove leading ```lang
-  if (t.startsWith("```")) {
-    const firstNewline = t.indexOf("\n");
-    if (firstNewline !== -1) t = t.slice(firstNewline + 1).trim();
-    else t = t.replace(/^```[a-zA-Z0-9_-]*\s*$/, "").trim();
-  }
-  // remove trailing ```
+  if (t.startsWith("```json")) t = t.slice(7).trim();
+  if (t.startsWith("```")) t = t.slice(3).trim();
   if (t.endsWith("```")) t = t.slice(0, -3).trim();
   return t;
-}
-
-/** Count unescaped double quotes to detect unterminated strings quickly */
-function hasOddUnescapedQuotes(s: string): boolean {
-  const str = String(s ?? "");
-  let count = 0;
-  let escaped = false;
-  for (let i = 0; i < str.length; i++) {
-    const ch = str[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (ch === '"') count++;
-  }
-  return count % 2 === 1;
-}
-
-/**
- * Extract the first complete JSON object/array by scanning braces/brackets
- * while respecting strings. This recovers from extra leading/trailing text.
- */
-function extractFirstJsonValue(raw: string): string | null {
-  const s = String(raw ?? "");
-  const start = (() => {
-    const iObj = s.indexOf("{");
-    const iArr = s.indexOf("[");
-    if (iObj === -1) return iArr;
-    if (iArr === -1) return iObj;
-    return Math.min(iObj, iArr);
-  })();
-
-  if (start < 0) return null;
-
-  const stack: string[] = [];
-  let inStr = false;
-  let escaped = false;
-
-  for (let i = start; i < s.length; i++) {
-    const ch = s[i];
-
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\") {
-      if (inStr) escaped = true;
-      continue;
-    }
-    if (ch === '"') {
-      inStr = !inStr;
-      continue;
-    }
-    if (inStr) continue;
-
-    if (ch === "{" || ch === "[") {
-      stack.push(ch);
-      continue;
-    }
-    if (ch === "}" || ch === "]") {
-      const top = stack[stack.length - 1];
-      if ((ch === "}" && top === "{") || (ch === "]" && top === "[")) {
-        stack.pop();
-        if (stack.length === 0) {
-          return s.slice(start, i + 1).trim();
-        }
-      } else {
-        // mismatched close; bail
-        return null;
-      }
-    }
-  }
-
-  return null;
 }
 
 function looksTruncatedJson(raw: string) {
   const t = (raw ?? "").trim();
   if (!t) return false;
-
-  // Strong signal for unterminated JSON strings
-  if (hasOddUnescapedQuotes(t)) return true;
 
   if (t.startsWith("{") && !t.endsWith("}")) return true;
   if (t.startsWith("[") && !t.endsWith("]")) return true;
@@ -220,28 +153,28 @@ function looksTruncatedJson(raw: string) {
  * ✅ safer JSON parse:
  * - detects likely truncation and returns null (prevents "partial object" mis-parse)
  * - strips fences
- * - extracts first complete {...} or [...] value if extra text exists
+ * - attempts best-effort extraction of largest {...} object
  */
 function safeParse<T = any>(raw: string, tag = "json"): T | null {
   try {
     const cleaned = stripCodeFences(String(raw ?? ""));
 
-    const candidate = extractFirstJsonValue(cleaned) ?? cleaned;
-
-    if (looksTruncatedJson(candidate)) {
-      console.error(`safeParse failed [${tag}] likely truncated len=${candidate.length}`);
+    if (looksTruncatedJson(cleaned)) {
+      console.error(`safeParse failed [${tag}] likely truncated len=${cleaned.length}`);
       return null;
     }
 
-    return JSON.parse(candidate) as T;
+    return JSON.parse(cleaned) as T;
   } catch (e) {
-    const cleaned = stripCodeFences(String(raw ?? ""));
-    const candidate = extractFirstJsonValue(cleaned);
-    if (candidate && !looksTruncatedJson(candidate)) {
-      try {
-        return JSON.parse(candidate) as T;
-      } catch {
-        // fall through
+    const str = stripCodeFences(String(raw ?? ""));
+    const i = str.indexOf("{");
+    const j = str.lastIndexOf("}");
+    if (i >= 0 && j > i) {
+      const candidate = str.slice(i, j + 1).trim();
+      if (!looksTruncatedJson(candidate)) {
+        try {
+          return JSON.parse(candidate) as T;
+        } catch {}
       }
     }
     console.error(`safeParse failed [${tag}] len=${raw?.length}`, e);
@@ -267,7 +200,7 @@ async function callOpenAI(
         {
           role: "system",
           content:
-            "You are an expert film development AI. Return ONLY valid JSON. No markdown, no commentary. Avoid using double-quote characters inside string values; rephrase instead.",
+            "You are an expert film development AI. Return ONLY valid JSON. No markdown, no commentary.",
         },
         { role: "user", content: prompt },
       ],
@@ -326,8 +259,12 @@ FORMAT RULES:
       ],
       ...pickCompletionParams({
         ...options,
+        // keep your defaults, but allow override
         temperature: typeof options.temperature === "number" ? options.temperature : 0.85,
+        // alias-supported: will become max_completion_tokens
         max_tokens: typeof options.max_tokens === "number" ? options.max_tokens : 4096,
+        max_completion_tokens:
+          typeof options.max_completion_tokens === "number" ? options.max_completion_tokens : undefined,
       }),
     },
     { timeout, maxRetries }
@@ -345,7 +282,6 @@ FORMAT RULES:
 /**
  * ✅ Structured Outputs helper for schema-locked JSON.
  * - Treats finish_reason === "length" as failure (prevents parsing truncated JSON).
- * - Adds extra truncation detection (odd quotes) to prevent "unterminated string" crashes.
  * - Disables SDK retries by default (maxRetries: 0) to avoid Vercel timeout spirals.
  * - Allows forcing json_object mode via OUTLINE_USE_JSON_SCHEMA=0 or options.force_json_object.
  */
@@ -366,7 +302,7 @@ async function callOpenAIJsonSchema<T>(
     {
       role: "system" as const,
       content:
-        "Return ONLY valid JSON that conforms exactly to the provided schema. No extra keys. No markdown. Avoid using double-quote characters inside string values; rephrase instead.",
+        "Return ONLY valid JSON that conforms exactly to the provided schema. No extra keys. No markdown.",
     },
     { role: "user" as const, content: prompt },
   ];
@@ -403,7 +339,12 @@ async function callOpenAIJsonSchema<T>(
           ...pickCompletionParams({
             ...options,
             temperature: typeof options.temperature === "number" ? options.temperature : 0.3,
+            // alias-supported: will become max_completion_tokens
             max_tokens: typeof options.max_tokens === "number" ? options.max_tokens : 4500,
+            max_completion_tokens:
+              typeof options.max_completion_tokens === "number"
+                ? options.max_completion_tokens
+                : undefined,
           }),
         },
         { timeout, maxRetries }
@@ -424,12 +365,8 @@ async function callOpenAIJsonSchema<T>(
         );
       }
 
-      // Treat odd quotes as truncation too (fixes “Unterminated string in JSON …” cases)
       if (finish === "length" || looksTruncatedJson(content)) {
-        if (debug)
-          console.log(
-            `[${tag}] detected truncation (finish=length or incomplete JSON/odd quotes).`
-          );
+        if (debug) console.log(`[${tag}] detected truncation (finish=length or incomplete JSON).`);
         return { data: null, content: content.trim(), finish_reason: finish, used_schema: true, meta };
       }
 
@@ -450,6 +387,7 @@ async function callOpenAIJsonSchema<T>(
   const { content, finish_reason } = await callOpenAI(prompt, {
     ...options,
     temperature: typeof options.temperature === "number" ? options.temperature : 0.3,
+    // alias-supported: will become max_completion_tokens via pickCompletionParams in callOpenAI
     max_tokens: typeof options.max_tokens === "number" ? options.max_tokens : 4500,
     timeout_ms: timeout,
     max_retries: maxRetries,
@@ -1072,7 +1010,6 @@ Constraints:
 - Keep the same story content as much as possible.
 - Ensure shortScript has exactly ${sceneCap} items.
 - ${summaryRule}
-- Do NOT use double-quote characters inside any text field values; rephrase instead.
 - Fix escaping, quotes, commas, and remove any extra keys.
 
 Idea: ${idea}
@@ -1112,8 +1049,17 @@ async function getActSplitOutline(params: {
   summaryWordSpec: string;
   deadlineMs: number;
 }): Promise<OutlineResult | null> {
-  const { idea, genre, targetPages, sceneCap, synopsisLength, longForm, summaryRule, summaryWordSpec, deadlineMs } =
-    params;
+  const {
+    idea,
+    genre,
+    targetPages,
+    sceneCap,
+    synopsisLength,
+    longForm,
+    summaryRule,
+    summaryWordSpec,
+    deadlineMs,
+  } = params;
 
   if (timeLeftMs(deadlineMs) < 25_000) return null;
 
@@ -1128,7 +1074,6 @@ Constraints:
 - Act summaries should be ${actSummaryWords}.
 - Themes 3–5 items.
 - Synopsis target length: ${synopsisLength}.
-- Do NOT use double-quote characters inside any text field values; rephrase instead.
 Return JSON with {logline, synopsis, themes, acts:[{act, summary}]}.
 `.trim();
 
@@ -1187,7 +1132,6 @@ Rules:
   - heading: proper slug line like "INT. LOCATION - DAY" (uppercase)
   - summary: action beat (${longForm ? "compact" : "detailed"})
 - ${compactRule}
-- Do NOT use double-quote characters inside any text field values; rephrase instead.
 - NO extra keys. NO markdown.
 
 MOVIE IDEA:
@@ -1237,7 +1181,9 @@ ${a.summary}
   const normalized = merged.map((s, idx) => ({
     ...s,
     sceneNumber: idx + 1,
-    act: (s.act as any) || (idx < Math.floor(sceneCap * 0.25) ? 1 : idx < Math.floor(sceneCap * 0.75) ? 2 : 3),
+    act:
+      (s.act as any) ||
+      (idx < Math.floor(sceneCap * 0.25) ? 1 : idx < Math.floor(sceneCap * 0.75) ? 2 : 3),
   }));
 
   return {
@@ -1321,7 +1267,6 @@ Rules:
   - summary: action beat (${summaryWordSpec})
 - ${summaryRule}
 - Themes: 3–5 items.
-- Do NOT use double-quote characters inside any text field values; rephrase instead.
 
 Synopsis length target: ${synopsisLength}
 `.trim();
@@ -1452,7 +1397,6 @@ For EACH chunk, define:
 - endState: 2–4 sentences describing the exact situation at the END of the chunk
 - mustInclude: 3–8 concrete story requirements that MUST happen in this chunk
 - mustAvoid: repetition, contradictions, resets, re-introducing characters as if new, etc.
-- Do NOT use double-quote characters inside any text field values; rephrase instead.
 
 Chunks:
 ${chunks
@@ -1549,9 +1493,6 @@ Return JSON:
   "themes": ["..."],
   "shortScript": [{"scene":"...","description":"...","dialogue":"..."}]
 }
-
-Rules:
-- Do NOT use double-quote characters inside any text field values; rephrase instead.
 `.trim();
 
     const metaRes = await callOpenAIJsonSchema<{
@@ -1618,7 +1559,10 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
   const effectiveScenes = Math.max(1, shortScript.length || approxScenes);
 
   const chunkCount =
-    targetPages <= 45 ? 4 : targetPages <= 70 ? 6 : targetPages <= 95 ? 8 : 10;
+    targetPages <= 45 ? 4 :
+    targetPages <= 70 ? 6 :
+    targetPages <= 95 ? 8 :
+    10;
 
   const safeChunkCount = Math.min(chunkCount, effectiveScenes);
   const pagesPerChunk = Math.ceil(targetPages / safeChunkCount);
@@ -1654,7 +1598,9 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     chunks: chunkInputs,
   });
 
-  type ChunkGenResult = { ok: true; content: string } | { ok: false; content: string; error: unknown };
+  type ChunkGenResult =
+    | { ok: true; content: string }
+    | { ok: false; content: string; error: unknown };
 
   const envConc = parseInt(process.env.SCRIPT_CHUNK_CONCURRENCY || "4", 10);
   const chunkConcurrency = clamp(Number.isFinite(envConc) ? envConc : 4, 1, 6);
@@ -1742,11 +1688,11 @@ ${chunk.beats}
     );
 
     for (const { idx, res } of retryResults) {
-      firstPass[idx] = res as any;
+      firstPass[idx] = res;
     }
   }
 
-  const stitchedChunks = firstPass.map((r: any, idx: number) => {
+  const stitchedChunks = firstPass.map((r, idx) => {
     if (r.ok) return r.content;
 
     const chunk = chunkInputs[idx];
@@ -1797,9 +1743,6 @@ Return JSON: { "characters": [...] } with the exact fields:
 - mood
 - visualDescription
 - imageUrl (empty string)
-
-Rules:
-- Do NOT use double-quote characters inside any text field values; rephrase instead.
 `.trim();
 
   const res = await callOpenAIJsonSchema<{ characters: Character[] }>(prompt, buildCharactersSchema(), {
@@ -1848,7 +1791,6 @@ Specifications:
 - For each frame/shot include:
   scene, shotNumber, description, cameraAngle, cameraMovement, lens, lighting, duration, dialogue, soundEffects, notes, imagePrompt, imageUrl (empty)
 - Always fill imagePrompt. Leave imageUrl empty.
-- Do NOT use double-quote characters inside any text field values; rephrase instead.
 
 Return JSON with key "storyboard" containing array of main frames, each optionally having coverageShots array.
 `.trim();
@@ -1895,8 +1837,6 @@ Generate a visual concept including:
 - concept object with visualStyle, colorPalette, cameraTechniques, lightingApproach, thematicSymbolism, productionValues
 - visualReferences: array of 3-5 objects with description and imageUrl (reference links if available)
 
-Rules:
-- Do NOT use double-quote characters inside any text field values; rephrase instead.
 Return JSON.
 `.trim();
 
@@ -1951,7 +1891,6 @@ Rules:
 - category amounts must roughly sum to total budget
 - percentages should total ~100
 - be realistic for indie film production
-- Do NOT use double-quote characters inside any text field values; rephrase instead.
 `.trim();
 
   const res = await callOpenAIJsonSchema<{ categories: any[] }>(prompt, buildBudgetSchema(), {
@@ -1986,9 +1925,6 @@ Return JSON:
     }
   ]
 }
-
-Rules:
-- Do NOT use double-quote characters inside any text field values; rephrase instead.
 `.trim();
 
   const res = await callOpenAIJsonSchema<{ schedule: any[] }>(prompt, buildScheduleSchema(), {
@@ -2046,7 +1982,6 @@ Return JSON:
 Rules:
 - Use only actual location names from scene headings (do not invent generic names).
 - Never leave any field blank.
-- Do NOT use double-quote characters inside any text field values; rephrase instead.
 `.trim();
 
   const res = await callOpenAIJsonSchema<{ locations: any[] }>(prompt, buildLocationsSchema(), {
@@ -2064,8 +1999,7 @@ Rules:
 // ---------- Sound Assets ----------
 
 export const generateSoundAssets = async (script: string, genre: string) => {
-  // Keep legacy heuristic, but ensure it never NaNs
-  const duration = parseInt(script.match(/\d+/)?.[0] || "5", 10) || 5;
+  const duration = parseInt(script.match(/\d+/)?.[0] || "5", 10);
   const numAssets = duration <= 15 ? 5 : duration <= 60 ? 8 : 15;
 
   const prompt = `
@@ -2091,7 +2025,6 @@ Return JSON:
 Rules:
 - duration must be at least 00:10
 - audioUrl must be an empty string
-- Do NOT use double-quote characters inside any text field values; rephrase instead.
 `.trim();
 
   const res = await callOpenAIJsonSchema<{ soundAssets: any[] }>(prompt, buildSoundAssetsSchema(), {
