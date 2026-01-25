@@ -149,29 +149,139 @@ function modelCandidatesForChat(rawModel: string, fallbackModel: string) {
   return uniq([m, alias, fallbackModel]);
 }
 
-function isModelAccessOrNotFound(err: any) {
-  const msg = String(err?.message || "");
-  const code = String(err?.code || err?.error?.code || "");
-  const status = Number(err?.status || err?.response?.status || 0);
+/**
+ * ✅ Robust error info extraction across:
+ * - OpenAI SDK (v4/v5) error shapes
+ * - fetch/undici errors
+ * - axios-like response wrappers
+ */
+function extractOpenAIErrorInfo(err: any): {
+  status: number;
+  code: string;
+  type: string;
+  param: string;
+  message: string;
+} {
+  const statusRaw =
+    err?.status ??
+    err?.response?.status ??
+    err?.response?.statusCode ??
+    err?.error?.status ??
+    err?.error?.response?.status ??
+    0;
 
-  return (
-    status === 403 ||
-    status === 404 ||
-    code === "model_not_found" ||
-    msg.includes("model_not_found") ||
-    msg.includes("does not have access to model") ||
-    msg.toLowerCase().includes("not found") ||
-    msg.toLowerCase().includes("no such model")
-  );
+  const status = Number(statusRaw) || 0;
+
+  // Prefer the deepest “OpenAI-style” error fields when present
+  const code =
+    String(
+      err?.code ??
+        err?.error?.code ??
+        err?.error?.error?.code ??
+        err?.response?.data?.error?.code ??
+        err?.response?.body?.error?.code ??
+        ""
+    ) || "";
+
+  const type =
+    String(
+      err?.type ??
+        err?.error?.type ??
+        err?.error?.error?.type ??
+        err?.response?.data?.error?.type ??
+        err?.response?.body?.error?.type ??
+        ""
+    ) || "";
+
+  const param =
+    String(
+      err?.param ??
+        err?.error?.param ??
+        err?.error?.error?.param ??
+        err?.response?.data?.error?.param ??
+        err?.response?.body?.error?.param ??
+        ""
+    ) || "";
+
+  const message =
+    String(
+      err?.message ??
+        err?.error?.message ??
+        err?.error?.error?.message ??
+        err?.response?.data?.error?.message ??
+        err?.response?.body?.error?.message ??
+        err?.response?.data?.message ??
+        err?.response?.body?.message ??
+        ""
+    ) || "";
+
+  return { status, code, type, param, message };
 }
 
+/**
+ * ✅ PATCH: replace the old isModelAccessOrNotFound helper
+ * This now correctly detects:
+ * - 403 "project does not have access to model"
+ * - 404 "model_not_found"
+ * - SDK errors where message/code live under err.error.*
+ */
+function isModelAccessOrNotFound(err: any) {
+  const info = extractOpenAIErrorInfo(err);
+  const msg = String(info.message || "").toLowerCase();
+  const code = String(info.code || "").toLowerCase();
+  const type = String(info.type || "").toLowerCase();
+  const status = Number(info.status || 0);
+
+  // Class-name hints in some SDK errors (safe, optional)
+  const name = String(err?.name || "").toLowerCase();
+
+  if (status === 403 || status === 404) return true;
+  if (name.includes("notfound") || name.includes("permission") || name.includes("forbidden")) return true;
+
+  // Common OpenAI codes/types for model issues
+  if (code === "model_not_found" || code === "not_found") return true;
+  if (type === "not_found_error" || type === "permission_denied" || type === "insufficient_permissions") return true;
+
+  // Message patterns seen in real logs
+  if (msg.includes("does not have access to model")) return true;
+  if (msg.includes("model_not_found")) return true;
+  if (msg.includes("no such model")) return true;
+  if (msg.includes("the model") && msg.includes("does not exist")) return true;
+  if (msg.includes("not found") && msg.includes("model")) return true;
+
+  return false;
+}
+
+/**
+ * ✅ PATCH: replace the old isTemperatureUnsupported helper
+ * This now detects the common OpenAI error wording:
+ * - "Unsupported value: 'temperature'..."
+ * - param="temperature"
+ * - messages that mention temperature + unsupported/invalid
+ */
 function isTemperatureUnsupported(err: any) {
-  const msg = String(err?.message || "").toLowerCase();
-  return (
-    msg.includes("unsupported value") &&
-    msg.includes("temperature") &&
-    (msg.includes("only the default") || msg.includes("default (1)") || msg.includes("supported"))
-  );
+  const info = extractOpenAIErrorInfo(err);
+  const msg = String(info.message || "").toLowerCase();
+  const param = String(info.param || "").toLowerCase();
+  const status = Number(info.status || 0);
+
+  // Most of these are 400s, but don’t hard-require it.
+  const mentionsTemp = param === "temperature" || msg.includes("temperature");
+
+  if (!mentionsTemp) return false;
+
+  if (msg.includes("unsupported value") && msg.includes("temperature")) return true;
+  if (msg.includes("unsupported") && msg.includes("temperature")) return true;
+  if (msg.includes("invalid") && msg.includes("temperature")) return true;
+
+  // Specific phrasing we’ve seen:
+  if (msg.includes("only the default") && msg.includes("temperature")) return true;
+  if (msg.includes("default (1)") && msg.includes("temperature")) return true;
+
+  // Some stacks wrap as generic “bad request”
+  if (status === 400 && mentionsTemp && (msg.includes("supported") || msg.includes("allowed"))) return true;
+
+  return false;
 }
 
 function pickCompletionParams(options: ChatOptions) {

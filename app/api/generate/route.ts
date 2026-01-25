@@ -96,11 +96,41 @@ function countScenes(text: string): number {
   return (String(text || "").match(/^(?:INT\.|EXT\.|INT\/EXT\.|EXT\/INT\.)/gim) || []).length;
 }
 
+// ✅ Robust OpenAI error extraction (OpenAI SDK often nests details under error.error.*)
+function getErrMessage(error: any): string {
+  return String(
+    error?.message ||
+      error?.error?.message ||
+      error?.response?.data?.error?.message ||
+      error?.cause?.message ||
+      ""
+  );
+}
+function getErrCode(error: any): string {
+  return String(
+    error?.code ||
+      error?.error?.code ||
+      error?.error?.type ||
+      error?.response?.data?.error?.code ||
+      ""
+  );
+}
+function getErrStatus(error: any): number {
+  const raw =
+    error?.status ??
+    error?.response?.status ??
+    error?.response?.data?.status ??
+    error?.error?.status ??
+    0;
+  const n = typeof raw === "string" ? parseInt(raw, 10) : Number(raw);
+  return Number.isFinite(n) ? n : 0;
+}
+
 function normalizeOpenAIError(error: any): { status: number; message: string; hint?: string } {
-  const msg = String(error?.message || "");
+  const msg = getErrMessage(error);
   const lower = msg.toLowerCase();
-  const code = String(error?.code || error?.error?.code || "");
-  const statusRaw = Number(error?.status || error?.response?.status || 500);
+  const code = getErrCode(error);
+  const statusRaw = getErrStatus(error);
   const status = statusRaw >= 400 && statusRaw <= 599 ? statusRaw : 500;
 
   // ✅ Missing env var (build-safe init throws this)
@@ -128,13 +158,15 @@ function normalizeOpenAIError(error: any): { status: number; message: string; hi
     };
   }
 
-  // ✅ Model access / not found (common current issue: 403 project does not have access to model)
+  // ✅ Model access / not found
   if (
     status === 403 ||
+    status === 404 ||
     code === "model_not_found" ||
-    msg.includes("does not have access to model") ||
-    msg.includes("model_not_found") ||
+    lower.includes("does not have access to model") ||
+    lower.includes("model_not_found") ||
     lower.includes("no such model") ||
+    // be careful with generic "not found" — keep it late
     lower.includes("not found")
   ) {
     const hint =
@@ -160,7 +192,7 @@ function normalizeOpenAIError(error: any): { status: number; message: string; hi
   }
 
   // ✅ Wrong token param
-  if (msg.includes("Unsupported parameter") && msg.includes("max_tokens")) {
+  if (lower.includes("unsupported parameter") && lower.includes("max_tokens")) {
     return {
       status: 400,
       message: msg,
@@ -190,7 +222,12 @@ function normalizeOpenAIError(error: any): { status: number; message: string; hi
   }
 
   // ✅ Timeouts
-  if (lower.includes("timeout") || lower.includes("timed out") || msg.includes("ETIMEDOUT") || msg.includes("AbortError")) {
+  if (
+    lower.includes("timeout") ||
+    lower.includes("timed out") ||
+    msg.includes("ETIMEDOUT") ||
+    msg.includes("AbortError")
+  ) {
     return {
       status: 504,
       message: msg || "Request timed out.",
@@ -331,7 +368,6 @@ export async function POST(request: NextRequest) {
       modelJson: process.env.OPENAI_MODEL_JSON || "(unset)",
       fallbackText: process.env.OPENAI_FALLBACK_MODEL_TEXT || "(unset)",
       fallbackJson: process.env.OPENAI_FALLBACK_MODEL_JSON || "(unset)",
-      // If this logs 800 but Vercel still kills at 300, you're not on the deployment you think you are.
       vercelMaxDuration: String(maxDuration),
       stepScriptTrimChars: STEP_SCRIPT_TRIM_CHARS,
     });
