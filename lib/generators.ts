@@ -6,8 +6,29 @@ import OpenAI from "openai";
  * - DO NOT instantiate OpenAI at module load.
  * - Lazily init at runtime when the API route is called.
  * - Also guard against accidental client-side import.
+ *
+ * ✅ IMPORTANT MODEL NOTE:
+ * The OpenAI platform now has explicit *chat* model aliases like `gpt-5.2-chat-latest`.
+ * If you set OPENAI_MODEL_TEXT / OPENAI_MODEL_JSON to `gpt-5.2`, we auto-map it to `gpt-5.2-chat-latest`
+ * when using `openai.chat.completions.create(...)` to avoid “model not found” errors.
  */
 let _openai: OpenAI | null = null;
+
+function normalizeChatModelName(model: string) {
+  const m = String(model || "").trim();
+  if (!m) return "gpt-5.2-chat-latest";
+
+  // Already a chat alias or explicit latest alias → keep as-is
+  if (/chat/i.test(m) || /-latest$/i.test(m)) return m;
+
+  // Common base model names → map to the corresponding chat alias
+  if (/^gpt-5\.2$/i.test(m)) return "gpt-5.2-chat-latest";
+  if (/^gpt-5$/i.test(m)) return "gpt-5-chat-latest";
+
+  // If you provided another model name, we keep it untouched.
+  // (If it’s not valid for Chat Completions, the API will error and you’ll see it in logs.)
+  return m;
+}
 
 function getOpenAI(): OpenAI {
   if (typeof window !== "undefined") {
@@ -23,13 +44,29 @@ function getOpenAI(): OpenAI {
     );
   }
 
-  _openai = new OpenAI({ apiKey });
+  const baseURL = process.env.OPENAI_BASE_URL?.trim() || undefined;
+
+  // ✅ Kill hidden retry spirals on serverless by default (override via env if desired)
+  const maxRetries = parseInt(process.env.OPENAI_CLIENT_MAX_RETRIES || "0", 10);
+  const timeout = parseInt(process.env.OPENAI_CLIENT_TIMEOUT_MS || "120000", 10); // 2 min client timeout (per-request overrides still apply)
+
+  _openai = new OpenAI({
+    apiKey,
+    ...(baseURL ? { baseURL } : {}),
+    maxRetries: Number.isFinite(maxRetries) ? maxRetries : 0,
+    timeout: Number.isFinite(timeout) ? timeout : 120000,
+  });
+
   return _openai;
 }
 
 // ✅ Model defaults (set these in Vercel env vars for Production + Preview)
-const MODEL_TEXT = process.env.OPENAI_MODEL_TEXT || "gpt-5.2"; // screenplay text
-const MODEL_JSON = process.env.OPENAI_MODEL_JSON || "gpt-5.2"; // structured JSON outputs
+const MODEL_TEXT_RAW = process.env.OPENAI_MODEL_TEXT || "gpt-5.2"; // screenplay text
+const MODEL_JSON_RAW = process.env.OPENAI_MODEL_JSON || "gpt-5.2"; // structured JSON outputs
+
+// ✅ Because this file uses `chat.completions`, normalize to chat aliases when needed
+const MODEL_TEXT = normalizeChatModelName(MODEL_TEXT_RAW);
+const MODEL_JSON = normalizeChatModelName(MODEL_JSON_RAW);
 
 // ✅ Debug + timeout guards (prevents hidden SDK retries / runaway outline loops)
 const DEBUG_OUTLINE = process.env.DEBUG_OUTLINE === "1";
@@ -38,6 +75,9 @@ const OUTLINE_TOTAL_BUDGET_MS = parseInt(process.env.OUTLINE_TOTAL_BUDGET_MS || 
 const OUTLINE_CALL_TIMEOUT_MS = parseInt(process.env.OUTLINE_CALL_TIMEOUT_MS || "45000", 10); // 45 seconds per outline call
 const DEFAULT_JSON_CALL_TIMEOUT_MS = parseInt(process.env.DEFAULT_JSON_CALL_TIMEOUT_MS || "60000", 10); // 60 seconds
 const DEFAULT_TEXT_CALL_TIMEOUT_MS = parseInt(process.env.DEFAULT_TEXT_CALL_TIMEOUT_MS || "90000", 10); // 90 seconds
+
+// Optional: cap completion tokens to avoid model hard-limit errors (override if you know your model supports more)
+const MAX_COMPLETION_TOKENS_CAP = parseInt(process.env.OPENAI_MAX_COMPLETION_TOKENS_CAP || "8192", 10);
 
 // ---------- Helpers for OpenAI calls ----------
 
@@ -64,7 +104,6 @@ type ChatOptions = {
   schema_name?: string; // json_schema name
   request_tag?: string; // debug logging tag
   timeout_ms?: number; // per-request timeout
-  max_retries?: number; // overrides SDK retries (default is 2; we want 0 for Vercel safety)
   debug?: boolean; // verbose logs
   force_json_object?: boolean; // force json_object even if schema enabled
 };
@@ -76,14 +115,18 @@ function pickCompletionParams(options: ChatOptions) {
   if (typeof options.temperature === "number") out.temperature = options.temperature;
 
   // ✅ Use max_completion_tokens (never max_tokens)
-  const mct =
+  const mctRaw =
     typeof options.max_completion_tokens === "number"
       ? options.max_completion_tokens
       : typeof options.max_tokens === "number"
       ? options.max_tokens
       : undefined;
 
-  if (typeof mct === "number") out.max_completion_tokens = mct;
+  if (typeof mctRaw === "number") {
+    const cap = Number.isFinite(MAX_COMPLETION_TOKENS_CAP) ? MAX_COMPLETION_TOKENS_CAP : 8192;
+    const mct = Math.max(1, Math.min(mctRaw, cap));
+    out.max_completion_tokens = mct;
+  }
 
   if (typeof options.top_p === "number") out.top_p = options.top_p;
   if (typeof options.presence_penalty === "number") out.presence_penalty = options.presence_penalty;
@@ -109,6 +152,7 @@ function extractUsage(completion: any) {
 function extractMsgContent(choice: any): string {
   const content = choice?.message?.content ?? "";
   if (typeof content === "string") return content;
+
   // Some SDKs can return array content parts; join text parts if present
   if (Array.isArray(content)) {
     return content
@@ -146,6 +190,9 @@ function looksTruncatedJson(raw: string) {
   const closesA = (t.match(/\]/g) || []).length;
   if (opensA > closesA) return true;
 
+  // If it ends mid-escape, it's likely truncated too
+  if (t.endsWith("\\")) return true;
+
   return false;
 }
 
@@ -167,10 +214,22 @@ function safeParse<T = any>(raw: string, tag = "json"): T | null {
     return JSON.parse(cleaned) as T;
   } catch (e) {
     const str = stripCodeFences(String(raw ?? ""));
+    // Try object extraction
     const i = str.indexOf("{");
     const j = str.lastIndexOf("}");
     if (i >= 0 && j > i) {
       const candidate = str.slice(i, j + 1).trim();
+      if (!looksTruncatedJson(candidate)) {
+        try {
+          return JSON.parse(candidate) as T;
+        } catch {}
+      }
+    }
+    // Try array extraction
+    const a = str.indexOf("[");
+    const b = str.lastIndexOf("]");
+    if (a >= 0 && b > a) {
+      const candidate = str.slice(a, b + 1).trim();
       if (!looksTruncatedJson(candidate)) {
         try {
           return JSON.parse(candidate) as T;
@@ -191,11 +250,10 @@ async function callOpenAI(
 
   const timeout =
     typeof options.timeout_ms === "number" ? options.timeout_ms : DEFAULT_JSON_CALL_TIMEOUT_MS;
-  const maxRetries = typeof options.max_retries === "number" ? options.max_retries : 0;
 
   const completion = await openai.chat.completions.create(
     {
-      model: options.model || MODEL_JSON,
+      model: normalizeChatModelName(options.model || MODEL_JSON),
       messages: [
         {
           role: "system",
@@ -207,7 +265,7 @@ async function callOpenAI(
       response_format: { type: "json_object" },
       ...pickCompletionParams(options),
     },
-    { timeout, maxRetries }
+    { timeout }
   );
 
   const choice = completion.choices[0];
@@ -231,11 +289,10 @@ async function callOpenAIText(
 
   const timeout =
     typeof options.timeout_ms === "number" ? options.timeout_ms : DEFAULT_TEXT_CALL_TIMEOUT_MS;
-  const maxRetries = typeof options.max_retries === "number" ? options.max_retries : 0;
 
   const completion = await openai.chat.completions.create(
     {
-      model: options.model || MODEL_TEXT,
+      model: normalizeChatModelName(options.model || MODEL_TEXT),
       messages: [
         {
           role: "system",
@@ -267,14 +324,13 @@ FORMAT RULES:
           typeof options.max_completion_tokens === "number" ? options.max_completion_tokens : undefined,
       }),
     },
-    { timeout, maxRetries }
+    { timeout }
   );
 
   const choice = completion.choices[0];
-  const msg = choice.message;
 
   return {
-    content: (extractMsgContent({ message: msg }) ?? "").trim(),
+    content: (extractMsgContent(choice) ?? "").trim(),
     finish_reason: choice.finish_reason || "stop",
   };
 }
@@ -282,7 +338,7 @@ FORMAT RULES:
 /**
  * ✅ Structured Outputs helper for schema-locked JSON.
  * - Treats finish_reason === "length" as failure (prevents parsing truncated JSON).
- * - Disables SDK retries by default (maxRetries: 0) to avoid Vercel timeout spirals.
+ * - Client retries are disabled by default in getOpenAI() to avoid Vercel timeout spirals.
  * - Allows forcing json_object mode via OUTLINE_USE_JSON_SCHEMA=0 or options.force_json_object.
  */
 async function callOpenAIJsonSchema<T>(
@@ -318,15 +374,13 @@ async function callOpenAIJsonSchema<T>(
       ? OUTLINE_CALL_TIMEOUT_MS
       : DEFAULT_JSON_CALL_TIMEOUT_MS;
 
-  const maxRetries = typeof options.max_retries === "number" ? options.max_retries : 0;
-
   const wantSchema = OUTLINE_USE_JSON_SCHEMA && options.force_json_object !== true;
 
   if (wantSchema) {
     try {
       const completion = await openai.chat.completions.create(
         {
-          model: options.model || MODEL_JSON,
+          model: normalizeChatModelName(options.model || MODEL_JSON),
           messages,
           response_format: {
             type: "json_schema",
@@ -347,7 +401,7 @@ async function callOpenAIJsonSchema<T>(
                 : undefined,
           }),
         },
-        { timeout, maxRetries }
+        { timeout }
       );
 
       const choice = completion.choices[0];
@@ -390,8 +444,18 @@ async function callOpenAIJsonSchema<T>(
     // alias-supported: will become max_completion_tokens via pickCompletionParams in callOpenAI
     max_tokens: typeof options.max_tokens === "number" ? options.max_tokens : 4500,
     timeout_ms: timeout,
-    max_retries: maxRetries,
   });
+
+  if (finish_reason === "length" || looksTruncatedJson(content)) {
+    if (debug) console.log(`[${tag}] fallback detected truncation (finish=length or incomplete JSON).`);
+    return {
+      data: null,
+      content: content.trim(),
+      finish_reason,
+      used_schema: false,
+      meta: { content_len: content.length, usage: null, finish_reason },
+    };
+  }
 
   const data = safeParse<T>(content, `${tag}-json_object-fallback`);
   const meta = { content_len: content.length, usage: null, finish_reason };
@@ -1028,7 +1092,6 @@ ${raw}
     request_tag: "outline-repair",
     schema_name: "OutlineRepair",
     timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
-    max_retries: 0,
   });
 
   return repaired.data;
@@ -1088,7 +1151,6 @@ Return JSON with {logline, synopsis, themes, acts:[{act, summary}]}.
     request_tag: "outline-acts",
     schema_name: "OutlineActs",
     timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
-    max_retries: 0,
     debug: true,
   });
 
@@ -1150,7 +1212,6 @@ ${a.summary}
           request_tag: `outline-act${a.act}-scenes-a${attempt}`,
           schema_name: `OutlineAct${a.act}Scenes`,
           timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
-          max_retries: 0,
           debug: true,
         }
       );
@@ -1278,7 +1339,6 @@ Synopsis length target: ${synopsisLength}
       request_tag: `outline-full-a${attempt}`,
       schema_name: "OutlineFull",
       timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
-      max_retries: 0,
       debug: true,
     });
 
@@ -1416,7 +1476,6 @@ ${c.beats}
     request_tag: "chunk-bible",
     schema_name: "ChunkBible",
     timeout_ms: DEFAULT_JSON_CALL_TIMEOUT_MS,
-    max_retries: 0,
     model: MODEL_JSON,
   });
 
@@ -1506,7 +1565,6 @@ Return JSON:
       request_tag: "short-meta",
       schema_name: "ShortMeta",
       model: MODEL_JSON,
-      max_retries: 0,
     });
 
     const meta =
@@ -1654,7 +1712,6 @@ ${chunk.beats}
         temperature: temp,
         max_tokens: maxTokensPerChunk,
         timeout_ms: DEFAULT_TEXT_CALL_TIMEOUT_MS,
-        max_retries: 0,
         model: MODEL_TEXT,
       });
 
@@ -1751,7 +1808,6 @@ Return JSON: { "characters": [...] } with the exact fields:
     request_tag: "characters",
     schema_name: "Characters",
     model: MODEL_JSON,
-    max_retries: 0,
   });
 
   return { characters: res.data?.characters || [] };
@@ -1801,7 +1857,6 @@ Return JSON with key "storyboard" containing array of main frames, each optional
     request_tag: "storyboard",
     schema_name: "Storyboard",
     model: MODEL_JSON,
-    max_retries: 0,
   });
 
   let frames = res.data?.storyboard || [];
@@ -1846,7 +1901,6 @@ Return JSON.
     request_tag: "concept",
     schema_name: "Concept",
     model: MODEL_JSON,
-    max_retries: 0,
   });
 
   return {
@@ -1899,7 +1953,6 @@ Rules:
     request_tag: "budget",
     schema_name: "Budget",
     model: MODEL_JSON,
-    max_retries: 0,
   });
 
   return res.data || { categories: [] };
@@ -1933,7 +1986,6 @@ Return JSON:
     request_tag: "schedule",
     schema_name: "Schedule",
     model: MODEL_JSON,
-    max_retries: 0,
   });
 
   return { schedule: res.data?.schedule || [] };
@@ -1990,7 +2042,6 @@ Rules:
     request_tag: "locations",
     schema_name: "Locations",
     model: MODEL_JSON,
-    max_retries: 0,
   });
 
   return { locations: res.data?.locations || [] };
@@ -2033,7 +2084,6 @@ Rules:
     request_tag: "sound",
     schema_name: "SoundAssets",
     model: MODEL_JSON,
-    max_retries: 0,
   });
 
   let soundAssets: any[] = res.data?.soundAssets || [];

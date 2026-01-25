@@ -19,6 +19,20 @@ export const runtime = "nodejs";
 // ✅ Helps avoid timeouts for long/feature generation on serverless
 export const maxDuration = 300;
 
+const ALLOWED_STEPS = new Set([
+  "characters",
+  "concept",
+  "storyboard",
+  "budget",
+  "schedule",
+  "locations",
+  "sound",
+]);
+
+function jsonError(message: string, status = 400, extra?: Record<string, any>) {
+  return NextResponse.json({ error: message, ...(extra || {}) }, { status });
+}
+
 /** Parse flexible duration strings:
  *  "120", "120 min", "120m", "2h", "2 hours",
  *  "60 min (Full Feature)", "120 min (Full Feature)",
@@ -55,18 +69,37 @@ function clampMinutes(mins: number): number {
 }
 
 function estimatePagesByWords(text: string, wordsPerPage = 220): number {
-  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  const words = String(text || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
   return Math.max(1, Math.round(words / wordsPerPage));
 }
 
 function countScenes(text: string): number {
-  return (text.match(/^(?:INT\.|EXT\.|INT\/EXT\.|EXT\/INT\.)/gim) || []).length;
+  return (String(text || "").match(/^(?:INT\.|EXT\.|INT\/EXT\.|EXT\/INT\.)/gim) || []).length;
 }
 
 function normalizeOpenAIError(error: any): { status: number; message: string; hint?: string } {
   const msg = String(error?.message || "");
   const code = String(error?.code || error?.error?.code || "");
-  const status = Number(error?.status || error?.response?.status || 500);
+  const statusRaw = Number(error?.status || error?.response?.status || 500);
+  const status = statusRaw >= 400 && statusRaw <= 599 ? statusRaw : 500;
+
+  // ✅ Auth / API key
+  if (
+    status === 401 ||
+    code === "invalid_api_key" ||
+    msg.toLowerCase().includes("invalid api key") ||
+    msg.toLowerCase().includes("incorrect api key")
+  ) {
+    return {
+      status: 401,
+      message: msg || "Invalid OpenAI API key.",
+      hint:
+        "Fix: confirm OPENAI_API_KEY is set in Vercel (Production + Preview) and redeploy. Make sure you pasted the full key and it belongs to the right OpenAI project.",
+    };
+  }
 
   // ✅ Model access / not found
   if (
@@ -78,7 +111,7 @@ function normalizeOpenAIError(error: any): { status: number; message: string; hi
       status: 400,
       message: msg || "Your OpenAI project does not have access to the requested model.",
       hint:
-        "Fix: set Vercel env vars OPENAI_MODEL_TEXT and OPENAI_MODEL_JSON to a model your project has access to (ex: gpt-4o-mini).",
+        "Fix: set Vercel env vars OPENAI_MODEL_TEXT and OPENAI_MODEL_JSON to a model your project can access (you set gpt-5.2 — if access fails, switch to an allowed model for your project).",
     };
   }
 
@@ -92,9 +125,34 @@ function normalizeOpenAIError(error: any): { status: number; message: string; hi
     };
   }
 
+  // ✅ Rate limit
+  if (status === 429 || code === "rate_limit_exceeded" || msg.toLowerCase().includes("rate limit")) {
+    return {
+      status: 429,
+      message: msg || "Rate limit exceeded.",
+      hint:
+        "Fix: reduce concurrency (SCRIPT_CHUNK_CONCURRENCY), reduce script length, or add backoff/retry client-side. Also verify your OpenAI account limits.",
+    };
+  }
+
+  // ✅ Timeouts
+  if (
+    msg.toLowerCase().includes("timeout") ||
+    msg.toLowerCase().includes("timed out") ||
+    msg.includes("ETIMEDOUT") ||
+    msg.includes("AbortError")
+  ) {
+    return {
+      status: 504,
+      message: msg || "Request timed out.",
+      hint:
+        "Fix: reduce script length, lower SCRIPT_CHUNK_CONCURRENCY, or shorten outline budgets (OUTLINE_TOTAL_BUDGET_MS / OUTLINE_CALL_TIMEOUT_MS).",
+    };
+  }
+
   // Fall back
   return {
-    status: status >= 400 && status <= 599 ? status : 500,
+    status,
     message: msg || "Unknown error",
   };
 }
@@ -116,6 +174,10 @@ async function generateScriptData(movieIdea: string, movieGenre: string, scriptL
     movieGenre,
     normalizedLength
   );
+
+  if (!scriptText || !String(scriptText).trim()) {
+    throw new Error("Script generator returned empty scriptText.");
+  }
 
   // Characters (better after script exists)
   let characters: Character[] = [];
@@ -154,76 +216,122 @@ async function generateScriptData(movieIdea: string, movieGenre: string, scriptL
 }
 
 export async function POST(request: NextRequest) {
+  const startedAt = Date.now();
   let body: any = {};
+
   try {
     body = await request.json();
   } catch {
-    // keep body as {} and fall through — downstream validations will catch it
+    body = {};
   }
 
   try {
-    const { movieIdea, movieGenre, scriptLength, step, script, scriptContent, characters } = body || {};
+    const {
+      movieIdea,
+      movieGenre,
+      scriptLength,
+      step: rawStep,
+      script,
+      scriptContent,
+      characters,
+    } = body || {};
+
+    const step = String(rawStep || "").trim().toLowerCase();
+    const isStepMode = !!step;
 
     console.log("Received request:", {
+      step,
+      isStepMode,
       movieIdea: !!movieIdea,
       movieGenre,
       scriptLength,
       parsedMinutes: scriptLength ? parseDurationToMinutes(scriptLength) : null,
-      step,
       hasScript: !!script,
       hasScriptContent: !!scriptContent,
       charactersCount: Array.isArray(characters) ? characters.length : 0,
     });
 
-    if (
-      !movieIdea &&
-      !["storyboard", "schedule", "locations", "sound", "characters", "concept", "budget"].includes(step)
-    ) {
-      return NextResponse.json(
-        { error: "Movie idea and genre are required for script generation." },
-        { status: 400 }
+    if (isStepMode && !ALLOWED_STEPS.has(step)) {
+      return jsonError(
+        `Invalid step "${step}". Allowed: ${Array.from(ALLOWED_STEPS).join(", ")}`,
+        400
       );
     }
 
+    // If NOT step mode, we’re generating the full package (script + meta)
+    if (!isStepMode) {
+      if (!movieIdea || !movieGenre || !scriptLength) {
+        return jsonError("movieIdea, movieGenre, and scriptLength are required for script generation.", 400);
+      }
+
+      const scriptResult = await generateScriptData(String(movieIdea), String(movieGenre), String(scriptLength));
+      const minutes = parseDurationToMinutes(String(scriptLength));
+
+      return NextResponse.json({
+        idea: movieIdea,
+        genre: movieGenre,
+        length: `${minutes} min`,
+        logline: scriptResult.logline,
+        synopsis: scriptResult.synopsis,
+        script: scriptResult.scriptText, // legacy key
+        scriptText: scriptResult.scriptText,
+        shortScript: scriptResult.shortScript,
+        themes: scriptResult.themes,
+        characters: scriptResult.characters,
+        stats: scriptResult.stats,
+        meta: {
+          step: "script",
+          ms: Date.now() - startedAt,
+        },
+      });
+    }
+
+    // Step mode handlers
     switch (step) {
       case "characters": {
         const content = scriptContent || script;
         if (!content) {
-          return NextResponse.json(
-            { error: "scriptContent (or script) is required for generating characters." },
-            { status: 400 }
-          );
+          return jsonError("scriptContent (or script) is required for generating characters.", 400);
         }
-        const result = await generateCharacters(content, movieGenre || "");
-        return NextResponse.json(result);
+        const result = await generateCharacters(String(content), String(movieGenre || ""));
+        return NextResponse.json({
+          ...result,
+          meta: { step, ms: Date.now() - startedAt },
+        });
       }
 
       case "concept": {
-        if (!script) {
-          return NextResponse.json({ error: "Script is required for generating concept." }, { status: 400 });
+        const content = scriptContent || script;
+        if (!content) {
+          return jsonError("script (or scriptContent) is required for generating concept.", 400);
         }
-        const result = await generateConcept(script, movieGenre || "");
-        return NextResponse.json(result);
+        const result = await generateConcept(String(content), String(movieGenre || ""));
+        return NextResponse.json({
+          ...result,
+          meta: { step, ms: Date.now() - startedAt },
+        });
       }
 
       case "storyboard": {
         if (!movieIdea || !movieGenre || !scriptLength) {
-          return NextResponse.json(
-            { error: "movieIdea, movieGenre, and scriptLength are required for storyboard." },
-            { status: 400 }
-          );
+          return jsonError("movieIdea, movieGenre, and scriptLength are required for storyboard.", 400);
+        }
+
+        const content = scriptContent || script;
+        if (!content) {
+          return jsonError("script (or scriptContent) is required for storyboard generation.", 400);
         }
 
         const frames: StoryboardFrame[] = await generateStoryboard({
-          movieIdea,
-          movieGenre,
-          script: script || "",
-          scriptLength,
-          characters: (characters as Character[]) || [],
+          movieIdea: String(movieIdea),
+          movieGenre: String(movieGenre),
+          script: String(content),
+          scriptLength: String(scriptLength),
+          characters: (Array.isArray(characters) ? (characters as Character[]) : []) || [],
         });
 
         return NextResponse.json({
-          storyboard: frames.map((frame) => ({
+          storyboard: (frames || []).map((frame) => ({
             scene: frame.scene,
             shotNumber: frame.shotNumber,
             description: frame.description,
@@ -251,65 +359,59 @@ export async function POST(request: NextRequest) {
               imageUrl: shot.imageUrl || "",
             })),
           })),
+          meta: { step, ms: Date.now() - startedAt },
         });
       }
 
       case "budget": {
         if (!movieGenre || !scriptLength) {
-          return NextResponse.json({ error: "movieGenre and scriptLength are required for budget." }, { status: 400 });
+          return jsonError("movieGenre and scriptLength are required for budget.", 400);
         }
-        const result = await generateBudget(movieGenre, scriptLength);
-        return NextResponse.json(result);
+        const result = await generateBudget(String(movieGenre), String(scriptLength));
+        return NextResponse.json({
+          ...result,
+          meta: { step, ms: Date.now() - startedAt },
+        });
       }
 
       case "schedule": {
-        if (!script || !scriptLength) {
-          return NextResponse.json({ error: "script and scriptLength are required for schedule." }, { status: 400 });
+        const content = scriptContent || script;
+        if (!content || !scriptLength) {
+          return jsonError("script (or scriptContent) and scriptLength are required for schedule.", 400);
         }
-        const result = await generateSchedule(script, scriptLength);
-        return NextResponse.json(result);
+        const result = await generateSchedule(String(content), String(scriptLength));
+        return NextResponse.json({
+          ...result,
+          meta: { step, ms: Date.now() - startedAt },
+        });
       }
 
       case "locations": {
-        if (!script) {
-          return NextResponse.json({ error: "script is required for locations." }, { status: 400 });
+        const content = scriptContent || script;
+        if (!content) {
+          return jsonError("script (or scriptContent) is required for locations.", 400);
         }
-        const result = await generateLocations(script, movieGenre || "");
-        return NextResponse.json(result);
+        const result = await generateLocations(String(content), String(movieGenre || ""));
+        return NextResponse.json({
+          ...result,
+          meta: { step, ms: Date.now() - startedAt },
+        });
       }
 
       case "sound": {
-        if (!script) {
-          return NextResponse.json({ error: "script is required for sound assets." }, { status: 400 });
+        const content = scriptContent || script;
+        if (!content) {
+          return jsonError("script (or scriptContent) is required for sound assets.", 400);
         }
-        const result = await generateSoundAssets(script, movieGenre || "");
-        return NextResponse.json(result);
+        const result = await generateSoundAssets(String(content), String(movieGenre || ""));
+        return NextResponse.json({
+          ...result,
+          meta: { step, ms: Date.now() - startedAt },
+        });
       }
 
       default: {
-        if (!movieIdea || !movieGenre || !scriptLength) {
-          return NextResponse.json(
-            { error: "movieIdea, movieGenre, and scriptLength are required for script generation." },
-            { status: 400 }
-          );
-        }
-
-        const scriptResult = await generateScriptData(movieIdea, movieGenre, scriptLength);
-        const minutes = parseDurationToMinutes(scriptLength);
-
-        return NextResponse.json({
-          idea: movieIdea,
-          genre: movieGenre,
-          length: `${minutes} min`,
-          logline: scriptResult.logline,
-          synopsis: scriptResult.synopsis,
-          script: scriptResult.scriptText, // legacy key
-          scriptText: scriptResult.scriptText,
-          shortScript: scriptResult.shortScript,
-          themes: scriptResult.themes,
-          characters: scriptResult.characters,
-          stats: scriptResult.stats,
-        });
+        return jsonError("Unhandled step.", 400);
       }
     }
   } catch (error: any) {
@@ -321,8 +423,10 @@ export async function POST(request: NextRequest) {
       {
         error: normalized.message || "Failed to generate film package. Please try again later.",
         hint: normalized.hint,
-        // keep details for debugging (you can remove this in production if you want)
         details: error?.stack || "No stack trace available",
+        meta: {
+          ms: Date.now() - startedAt,
+        },
       },
       { status: normalized.status || 500 }
     );
