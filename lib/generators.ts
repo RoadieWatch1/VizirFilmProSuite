@@ -8,27 +8,23 @@ import OpenAI from "openai";
  * - Also guard against accidental client-side import.
  *
  * ✅ IMPORTANT MODEL NOTE:
- * The OpenAI platform now has explicit *chat* model aliases like `gpt-5.2-chat-latest`.
- * If you set OPENAI_MODEL_TEXT / OPENAI_MODEL_JSON to `gpt-5.2`, we auto-map it to `gpt-5.2-chat-latest`
- * when using `openai.chat.completions.create(...)` to avoid “model not found” errors.
+ * This file uses `openai.chat.completions.create(...)`.
+ * Some accounts/projects have access restrictions per model alias (ex: `gpt-5-chat-latest`).
+ * We therefore:
+ *  - Try your env model name as-is FIRST
+ *  - Then try the corresponding `*-chat-latest` alias (for gpt-5 / gpt-5.2)
+ *  - Then fall back to a safe model you likely have (default: gpt-4o-mini)
+ *
+ * ✅ IMPORTANT PARAM NOTE (your current error):
+ * Some models reject custom `temperature` values (only default = 1 is supported).
+ * To stop `400 Unsupported value: 'temperature'...`, we DO NOT send `temperature`
+ * unless you explicitly enable it via env:
+ *
+ *   OPENAI_SEND_TEMPERATURE=1
+ *
+ * Keep it OFF (default) to be compatible with models that only support default temperature.
  */
 let _openai: OpenAI | null = null;
-
-function normalizeChatModelName(model: string) {
-  const m = String(model || "").trim();
-  if (!m) return "gpt-5.2-chat-latest";
-
-  // Already a chat alias or explicit latest alias → keep as-is
-  if (/chat/i.test(m) || /-latest$/i.test(m)) return m;
-
-  // Common base model names → map to the corresponding chat alias
-  if (/^gpt-5\.2$/i.test(m)) return "gpt-5.2-chat-latest";
-  if (/^gpt-5$/i.test(m)) return "gpt-5-chat-latest";
-
-  // If you provided another model name, we keep it untouched.
-  // (If it’s not valid for Chat Completions, the API will error and you’ll see it in logs.)
-  return m;
-}
 
 function getOpenAI(): OpenAI {
   if (typeof window !== "undefined") {
@@ -48,7 +44,7 @@ function getOpenAI(): OpenAI {
 
   // ✅ Kill hidden retry spirals on serverless by default (override via env if desired)
   const maxRetries = parseInt(process.env.OPENAI_CLIENT_MAX_RETRIES || "0", 10);
-  const timeout = parseInt(process.env.OPENAI_CLIENT_TIMEOUT_MS || "120000", 10); // 2 min client timeout (per-request overrides still apply)
+  const timeout = parseInt(process.env.OPENAI_CLIENT_TIMEOUT_MS || "120000", 10); // 2 min client timeout
 
   _openai = new OpenAI({
     apiKey,
@@ -61,12 +57,15 @@ function getOpenAI(): OpenAI {
 }
 
 // ✅ Model defaults (set these in Vercel env vars for Production + Preview)
-const MODEL_TEXT_RAW = process.env.OPENAI_MODEL_TEXT || "gpt-5.2"; // screenplay text
-const MODEL_JSON_RAW = process.env.OPENAI_MODEL_JSON || "gpt-5.2"; // structured JSON outputs
+const MODEL_TEXT_RAW = (process.env.OPENAI_MODEL_TEXT || "gpt-4o-mini").trim(); // screenplay text
+const MODEL_JSON_RAW = (process.env.OPENAI_MODEL_JSON || "gpt-4o-mini").trim(); // structured JSON outputs
 
-// ✅ Because this file uses `chat.completions`, normalize to chat aliases when needed
-const MODEL_TEXT = normalizeChatModelName(MODEL_TEXT_RAW);
-const MODEL_JSON = normalizeChatModelName(MODEL_JSON_RAW);
+// ✅ Fallback models (used only if your chosen model is blocked/unavailable)
+const FALLBACK_MODEL_TEXT = (process.env.OPENAI_FALLBACK_MODEL_TEXT || "gpt-4o-mini").trim();
+const FALLBACK_MODEL_JSON = (process.env.OPENAI_FALLBACK_MODEL_JSON || "gpt-4o-mini").trim();
+
+// ✅ Temperature sending is OFF by default (fixes your current OpenAI error)
+const SEND_TEMPERATURE = process.env.OPENAI_SEND_TEMPERATURE === "1";
 
 // ✅ Debug + timeout guards (prevents hidden SDK retries / runaway outline loops)
 const DEBUG_OUTLINE = process.env.DEBUG_OUTLINE === "1";
@@ -83,6 +82,8 @@ const MAX_COMPLETION_TOKENS_CAP = parseInt(process.env.OPENAI_MAX_COMPLETION_TOK
 
 type ChatOptions = {
   model?: string;
+
+  // NOTE: we only SEND temperature if OPENAI_SEND_TEMPERATURE=1
   temperature?: number;
 
   /**
@@ -93,7 +94,7 @@ type ChatOptions = {
   max_completion_tokens?: number;
   max_tokens?: number; // alias (never forwarded)
 
-  // Supported  params (optional)
+  // Supported params (optional)
   top_p?: number;
   presence_penalty?: number;
   frequency_penalty?: number;
@@ -108,11 +109,73 @@ type ChatOptions = {
   force_json_object?: boolean; // force json_object even if schema enabled
 };
 
+function uniq(arr: string[]) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of arr) {
+    const s = String(v || "").trim();
+    if (!s) continue;
+    if (seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+function toChatAliasIfKnown(model: string) {
+  const m = String(model || "").trim();
+  if (!m) return "";
+
+  // Already a chat alias or explicit latest alias → keep as-is
+  if (/chat/i.test(m) || /-latest$/i.test(m)) return m;
+
+  // Common base model names → map to chat alias candidate
+  if (/^gpt-5\.2$/i.test(m)) return "gpt-5.2-chat-latest";
+  if (/^gpt-5$/i.test(m)) return "gpt-5-chat-latest";
+
+  // Otherwise: no known alias mapping
+  return "";
+}
+
+function modelCandidatesForChat(rawModel: string, fallbackModel: string) {
+  const m = String(rawModel || "").trim();
+  const alias = toChatAliasIfKnown(m);
+  return uniq([m, alias, fallbackModel]);
+}
+
+function isModelAccessOrNotFound(err: any) {
+  const msg = String(err?.message || "");
+  const code = String(err?.code || err?.error?.code || "");
+  const status = Number(err?.status || err?.response?.status || 0);
+
+  return (
+    status === 403 ||
+    status === 404 ||
+    code === "model_not_found" ||
+    msg.includes("model_not_found") ||
+    msg.includes("does not have access to model") ||
+    msg.toLowerCase().includes("not found") ||
+    msg.toLowerCase().includes("no such model")
+  );
+}
+
+function isTemperatureUnsupported(err: any) {
+  const msg = String(err?.message || "").toLowerCase();
+  return (
+    msg.includes("unsupported value") &&
+    msg.includes("temperature") &&
+    (msg.includes("only the default") || msg.includes("default (1)") || msg.includes("supported"))
+  );
+}
+
 function pickCompletionParams(options: ChatOptions) {
   // Only include keys OpenAI accepts — prevents “unknown param” crashes.
   const out: any = {};
 
-  if (typeof options.temperature === "number") out.temperature = options.temperature;
+  // ✅ Temperature is OFF by default to avoid the model error you hit
+  if (SEND_TEMPERATURE && typeof options.temperature === "number") {
+    out.temperature = options.temperature;
+  }
 
   // ✅ Use max_completion_tokens (never max_tokens)
   const mctRaw =
@@ -241,31 +304,79 @@ function safeParse<T = any>(raw: string, tag = "json"): T | null {
   }
 }
 
+/**
+ * ✅ Core wrapper:
+ * - tries model candidates (env model → chat alias → fallback)
+ * - if model rejects temperature, retries without temperature (even if OPENAI_SEND_TEMPERATURE=1)
+ */
+async function createChatCompletionWithFallback(
+  payload: any,
+  timeout: number,
+  candidates: string[],
+  tag: string
+) {
+  const openai = getOpenAI();
+  let lastErr: any = null;
+
+  for (const model of candidates) {
+    try {
+      const basePayload = { ...payload, model };
+
+      try {
+        return await openai.chat.completions.create(basePayload, { timeout });
+      } catch (err: any) {
+        // If temperature is rejected, retry same model once without temperature
+        if (isTemperatureUnsupported(err) && basePayload.temperature !== undefined) {
+          const retryPayload = { ...basePayload };
+          delete retryPayload.temperature;
+          delete retryPayload.top_p; // optional: some models pair restrictions; safe to remove too
+          return await openai.chat.completions.create(retryPayload, { timeout });
+        }
+        throw err;
+      }
+    } catch (err: any) {
+      lastErr = err;
+
+      // If this is a model availability/access problem, try next candidate
+      if (isModelAccessOrNotFound(err)) {
+        if (DEBUG_OUTLINE) {
+          console.log(`[${tag}] model failed: ${model} → trying next. msg=${String(err?.message || "")}`);
+        }
+        continue;
+      }
+
+      // Otherwise, this is a real failure
+      throw err;
+    }
+  }
+
+  // All candidates failed
+  throw lastErr || new Error(`[${tag}] all model candidates failed`);
+}
+
 async function callOpenAI(
   prompt: string,
   options: ChatOptions = {}
 ): Promise<{ content: string; finish_reason: string }> {
   // JSON-oriented helper (use for simple JSON calls)
-  const openai = getOpenAI();
+  const candidates = modelCandidatesForChat(options.model || MODEL_JSON_RAW, FALLBACK_MODEL_JSON);
+  const timeout = typeof options.timeout_ms === "number" ? options.timeout_ms : DEFAULT_JSON_CALL_TIMEOUT_MS;
 
-  const timeout =
-    typeof options.timeout_ms === "number" ? options.timeout_ms : DEFAULT_JSON_CALL_TIMEOUT_MS;
-
-  const completion = await openai.chat.completions.create(
+  const completion = await createChatCompletionWithFallback(
     {
-      model: normalizeChatModelName(options.model || MODEL_JSON),
       messages: [
         {
           role: "system",
-          content:
-            "You are an expert film development AI. Return ONLY valid JSON. No markdown, no commentary.",
+          content: "You are an expert film development AI. Return ONLY valid JSON. No markdown, no commentary.",
         },
         { role: "user", content: prompt },
       ],
       response_format: { type: "json_object" },
       ...pickCompletionParams(options),
     },
-    { timeout }
+    timeout,
+    candidates,
+    options.request_tag || "json_object"
   );
 
   const choice = completion.choices[0];
@@ -285,14 +396,11 @@ async function callOpenAIText(
   options: ChatOptions = {}
 ): Promise<{ content: string; finish_reason: string }> {
   // Text-only helper (use for screenplay chunks). No JSON formatting pressure.
-  const openai = getOpenAI();
+  const candidates = modelCandidatesForChat(options.model || MODEL_TEXT_RAW, FALLBACK_MODEL_TEXT);
+  const timeout = typeof options.timeout_ms === "number" ? options.timeout_ms : DEFAULT_TEXT_CALL_TIMEOUT_MS;
 
-  const timeout =
-    typeof options.timeout_ms === "number" ? options.timeout_ms : DEFAULT_TEXT_CALL_TIMEOUT_MS;
-
-  const completion = await openai.chat.completions.create(
+  const completion = await createChatCompletionWithFallback(
     {
-      model: normalizeChatModelName(options.model || MODEL_TEXT),
       messages: [
         {
           role: "system",
@@ -316,15 +424,17 @@ FORMAT RULES:
       ],
       ...pickCompletionParams({
         ...options,
-        // keep your defaults, but allow override
-        temperature: typeof options.temperature === "number" ? options.temperature : 0.85,
+        // Keep a safe default (works even on models that only support default temperature)
+        temperature: typeof options.temperature === "number" ? options.temperature : 1,
         // alias-supported: will become max_completion_tokens
         max_tokens: typeof options.max_tokens === "number" ? options.max_tokens : 4096,
         max_completion_tokens:
           typeof options.max_completion_tokens === "number" ? options.max_completion_tokens : undefined,
       }),
     },
-    { timeout }
+    timeout,
+    candidates,
+    options.request_tag || "text"
   );
 
   const choice = completion.choices[0];
@@ -352,13 +462,10 @@ async function callOpenAIJsonSchema<T>(
   used_schema: boolean;
   meta?: { content_len: number; usage: any; finish_reason: string };
 }> {
-  const openai = getOpenAI();
-
   const messages = [
     {
       role: "system" as const,
-      content:
-        "Return ONLY valid JSON that conforms exactly to the provided schema. No extra keys. No markdown.",
+      content: "Return ONLY valid JSON that conforms exactly to the provided schema. No extra keys. No markdown.",
     },
     { role: "user" as const, content: prompt },
   ];
@@ -376,11 +483,12 @@ async function callOpenAIJsonSchema<T>(
 
   const wantSchema = OUTLINE_USE_JSON_SCHEMA && options.force_json_object !== true;
 
+  const candidates = modelCandidatesForChat(options.model || MODEL_JSON_RAW, FALLBACK_MODEL_JSON);
+
   if (wantSchema) {
     try {
-      const completion = await openai.chat.completions.create(
+      const completion = await createChatCompletionWithFallback(
         {
-          model: normalizeChatModelName(options.model || MODEL_JSON),
           messages,
           response_format: {
             type: "json_schema",
@@ -392,16 +500,17 @@ async function callOpenAIJsonSchema<T>(
           },
           ...pickCompletionParams({
             ...options,
+            // If OPENAI_SEND_TEMPERATURE=1, you can still set this,
+            // but some models will reject non-default values; wrapper retries without temperature.
             temperature: typeof options.temperature === "number" ? options.temperature : 0.3,
-            // alias-supported: will become max_completion_tokens
             max_tokens: typeof options.max_tokens === "number" ? options.max_tokens : 4500,
             max_completion_tokens:
-              typeof options.max_completion_tokens === "number"
-                ? options.max_completion_tokens
-                : undefined,
+              typeof options.max_completion_tokens === "number" ? options.max_completion_tokens : undefined,
           }),
         },
-        { timeout }
+        timeout,
+        candidates,
+        tag
       );
 
       const choice = completion.choices[0];
@@ -425,13 +534,7 @@ async function callOpenAIJsonSchema<T>(
       }
 
       const data = safeParse<T>(content, `${tag}-json_schema`);
-      return {
-        data,
-        content: content.trim(),
-        finish_reason: finish,
-        used_schema: true,
-        meta,
-      };
+      return { data, content: content.trim(), finish_reason: finish, used_schema: true, meta };
     } catch (err) {
       if (debug) console.log(`[${tag}] schema call threw; falling back to json_object.`, err);
     }
@@ -441,9 +544,10 @@ async function callOpenAIJsonSchema<T>(
   const { content, finish_reason } = await callOpenAI(prompt, {
     ...options,
     temperature: typeof options.temperature === "number" ? options.temperature : 0.3,
-    // alias-supported: will become max_completion_tokens via pickCompletionParams in callOpenAI
     max_tokens: typeof options.max_tokens === "number" ? options.max_tokens : 4500,
     timeout_ms: timeout,
+    request_tag: tag,
+    model: options.model,
   });
 
   if (finish_reason === "length" || looksTruncatedJson(content)) {
@@ -1203,18 +1307,14 @@ ACT ${a.act} SUMMARY:
 ${a.summary}
 `.trim();
 
-      const res = await callOpenAIJsonSchema<{ shortScript: ShortScriptItem[] }>(
-        prompt,
-        buildActScenesSchema(a.count),
-        {
-          temperature: attempt === 2 ? 0.22 : 0.28,
-          max_tokens: attempt === 2 ? 1600 : 2100,
-          request_tag: `outline-act${a.act}-scenes-a${attempt}`,
-          schema_name: `OutlineAct${a.act}Scenes`,
-          timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
-          debug: true,
-        }
-      );
+      const res = await callOpenAIJsonSchema<{ shortScript: ShortScriptItem[] }>(prompt, buildActScenesSchema(a.count), {
+        temperature: attempt === 2 ? 0.22 : 0.28,
+        max_tokens: attempt === 2 ? 1600 : 2100,
+        request_tag: `outline-act${a.act}-scenes-a${attempt}`,
+        schema_name: `OutlineAct${a.act}Scenes`,
+        timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
+        debug: true,
+      });
 
       if (res.data?.shortScript?.length === a.count) {
         actScenes = res.data.shortScript.map((s, idx) => ({
@@ -1476,7 +1576,7 @@ ${c.beats}
     request_tag: "chunk-bible",
     schema_name: "ChunkBible",
     timeout_ms: DEFAULT_JSON_CALL_TIMEOUT_MS,
-    model: MODEL_JSON,
+    model: MODEL_JSON_RAW,
   });
 
   if (res.data?.chunks?.length === chunks.length) return res.data.chunks;
@@ -1519,8 +1619,7 @@ export const generateScript = async (idea: string, genre: string, length: string
     numCharacters = 6;
     synopsisLength = "500 words";
   } else {
-    structureGuide =
-      "An epic feature (100+ pages). Complex subplots, ensemble cast, extended character development.";
+    structureGuide = "An epic feature (100+ pages). Complex subplots, ensemble cast, extended character development.";
     numActs = 3;
     numCharacters = 7;
     synopsisLength = "600 words";
@@ -1564,7 +1663,7 @@ Return JSON:
       max_tokens: 2400,
       request_tag: "short-meta",
       schema_name: "ShortMeta",
-      model: MODEL_JSON,
+      model: MODEL_JSON_RAW,
     });
 
     const meta =
@@ -1590,9 +1689,10 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
 `.trim();
 
     const { content: scriptText } = await callOpenAIText(writePrompt, {
-      temperature: 0.82,
+      temperature: 1, // safe default; only sent if OPENAI_SEND_TEMPERATURE=1
       max_tokens: 4096,
-      model: MODEL_TEXT,
+      model: MODEL_TEXT_RAW,
+      request_tag: "short-script",
     });
 
     return {
@@ -1706,13 +1806,14 @@ ${chunk.beats}
 `.trim();
 
     try {
-      const temp = attempt >= 2 ? 0.78 : 0.85;
+      const temp = attempt >= 2 ? 1 : 1; // safe default; only sent if OPENAI_SEND_TEMPERATURE=1
 
       const { content } = await callOpenAIText(chunkPrompt, {
         temperature: temp,
         max_tokens: maxTokensPerChunk,
         timeout_ms: DEFAULT_TEXT_CALL_TIMEOUT_MS,
-        model: MODEL_TEXT,
+        model: MODEL_TEXT_RAW,
+        request_tag: `feature-chunk-${chunk.part}-a${attempt}`,
       });
 
       const cleaned = (content || "").trim();
@@ -1807,7 +1908,7 @@ Return JSON: { "characters": [...] } with the exact fields:
     max_tokens: 2200,
     request_tag: "characters",
     schema_name: "Characters",
-    model: MODEL_JSON,
+    model: MODEL_JSON_RAW,
   });
 
   return { characters: res.data?.characters || [] };
@@ -1856,7 +1957,7 @@ Return JSON with key "storyboard" containing array of main frames, each optional
     max_tokens: 4500,
     request_tag: "storyboard",
     schema_name: "Storyboard",
-    model: MODEL_JSON,
+    model: MODEL_JSON_RAW,
   });
 
   let frames = res.data?.storyboard || [];
@@ -1900,7 +2001,7 @@ Return JSON.
     max_tokens: 2200,
     request_tag: "concept",
     schema_name: "Concept",
-    model: MODEL_JSON,
+    model: MODEL_JSON_RAW,
   });
 
   return {
@@ -1952,7 +2053,7 @@ Rules:
     max_tokens: 2600,
     request_tag: "budget",
     schema_name: "Budget",
-    model: MODEL_JSON,
+    model: MODEL_JSON_RAW,
   });
 
   return res.data || { categories: [] };
@@ -1985,7 +2086,7 @@ Return JSON:
     max_tokens: 2200,
     request_tag: "schedule",
     schema_name: "Schedule",
-    model: MODEL_JSON,
+    model: MODEL_JSON_RAW,
   });
 
   return { schedule: res.data?.schedule || [] };
@@ -2041,7 +2142,7 @@ Rules:
     max_tokens: 3200,
     request_tag: "locations",
     schema_name: "Locations",
-    model: MODEL_JSON,
+    model: MODEL_JSON_RAW,
   });
 
   return { locations: res.data?.locations || [] };
@@ -2083,7 +2184,7 @@ Rules:
     max_tokens: 2600,
     request_tag: "sound",
     schema_name: "SoundAssets",
-    model: MODEL_JSON,
+    model: MODEL_JSON_RAW,
   });
 
   let soundAssets: any[] = res.data?.soundAssets || [];

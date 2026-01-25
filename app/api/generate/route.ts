@@ -16,7 +16,7 @@ import {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// ✅ Helps avoid timeouts for long/feature generation on serverless
+// ✅ Works only if Vercel Project Settings → Functions → Default Max Duration is set to 800
 export const maxDuration = 800;
 
 const ALLOWED_STEPS = new Set([
@@ -111,7 +111,17 @@ function normalizeOpenAIError(error: any): { status: number; message: string; hi
       status: 400,
       message: msg || "Your OpenAI project does not have access to the requested model.",
       hint:
-        "Fix: set Vercel env vars OPENAI_MODEL_TEXT and OPENAI_MODEL_JSON to a model your project can access (you set gpt-5.2 — if access fails, switch to an allowed model for your project).",
+        "Fix: set Vercel env vars OPENAI_MODEL_TEXT and OPENAI_MODEL_JSON to a model your project can access (if gpt-5.2 access fails, switch to a model you explicitly allowed in OpenAI Project settings).",
+    };
+  }
+
+  // ✅ Model param restrictions (temperature not supported)
+  if (msg.toLowerCase().includes("unsupported value") && msg.toLowerCase().includes("temperature")) {
+    return {
+      status: 400,
+      message: msg,
+      hint:
+        "Fix: your selected model does NOT support temperature overrides. In lib/generators.ts, remove temperature from calls (or only set it when the model supports it). Redeploy after updating.",
     };
   }
 
@@ -157,6 +167,21 @@ function normalizeOpenAIError(error: any): { status: number; message: string; hi
   };
 }
 
+/**
+ * ✅ Simple hard timeout wrapper (keeps API from hanging forever on a single step)
+ */
+async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let t: any;
+  const timeout = new Promise<never>((_, reject) => {
+    t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function generateScriptData(movieIdea: string, movieGenre: string, scriptLength: string) {
   const minutes = parseDurationToMinutes(scriptLength);
   const normalizedLength = `${minutes} min`;
@@ -167,12 +192,17 @@ async function generateScriptData(movieIdea: string, movieGenre: string, scriptL
     requestedLength: scriptLength,
     parsedMinutes: minutes,
     normalizedLength,
+    // ✅ Safe env echo (helps catch “wrong project/env vars not deployed”)
+    modelText: process.env.OPENAI_MODEL_TEXT || "(unset)",
+    modelJson: process.env.OPENAI_MODEL_JSON || "(unset)",
+    vercelMaxDuration: String(maxDuration),
   });
 
-  const { logline, synopsis, scriptText, shortScript, themes } = await generateScript(
-    movieIdea,
-    movieGenre,
-    normalizedLength
+  // ✅ Script generation can take a while. Keep a route-side guard too.
+  const { logline, synopsis, scriptText, shortScript, themes } = await withTimeout(
+    generateScript(movieIdea, movieGenre, normalizedLength),
+    760_000, // ~12m 40s (route max is 800s; keep buffer for JSON + response)
+    "generateScript"
   );
 
   if (!scriptText || !String(scriptText).trim()) {
@@ -182,7 +212,11 @@ async function generateScriptData(movieIdea: string, movieGenre: string, scriptL
   // Characters (better after script exists)
   let characters: Character[] = [];
   try {
-    const charactersResult = await generateCharacters(scriptText, movieGenre);
+    const charactersResult = await withTimeout(
+      generateCharacters(scriptText, movieGenre),
+      120_000,
+      "generateCharacters"
+    );
     characters = charactersResult.characters || [];
     console.log(`Generated ${characters.length} characters`);
   } catch (err) {
@@ -249,13 +283,14 @@ export async function POST(request: NextRequest) {
       hasScript: !!script,
       hasScriptContent: !!scriptContent,
       charactersCount: Array.isArray(characters) ? characters.length : 0,
+      modelText: process.env.OPENAI_MODEL_TEXT || "(unset)",
+      modelJson: process.env.OPENAI_MODEL_JSON || "(unset)",
+      // If this logs 800 but Vercel still kills at 300, you're not on the deployment you think you are.
+      vercelMaxDuration: String(maxDuration),
     });
 
     if (isStepMode && !ALLOWED_STEPS.has(step)) {
-      return jsonError(
-        `Invalid step "${step}". Allowed: ${Array.from(ALLOWED_STEPS).join(", ")}`,
-        400
-      );
+      return jsonError(`Invalid step "${step}". Allowed: ${Array.from(ALLOWED_STEPS).join(", ")}`, 400);
     }
 
     // If NOT step mode, we’re generating the full package (script + meta)
@@ -282,6 +317,8 @@ export async function POST(request: NextRequest) {
         meta: {
           step: "script",
           ms: Date.now() - startedAt,
+          modelText: process.env.OPENAI_MODEL_TEXT || "(unset)",
+          modelJson: process.env.OPENAI_MODEL_JSON || "(unset)",
         },
       });
     }
@@ -290,26 +327,28 @@ export async function POST(request: NextRequest) {
     switch (step) {
       case "characters": {
         const content = scriptContent || script;
-        if (!content) {
-          return jsonError("scriptContent (or script) is required for generating characters.", 400);
-        }
-        const result = await generateCharacters(String(content), String(movieGenre || ""));
-        return NextResponse.json({
-          ...result,
-          meta: { step, ms: Date.now() - startedAt },
-        });
+        if (!content) return jsonError("scriptContent (or script) is required for generating characters.", 400);
+
+        const result = await withTimeout(
+          generateCharacters(String(content), String(movieGenre || "")),
+          120_000,
+          "generateCharacters"
+        );
+
+        return NextResponse.json({ ...result, meta: { step, ms: Date.now() - startedAt } });
       }
 
       case "concept": {
         const content = scriptContent || script;
-        if (!content) {
-          return jsonError("script (or scriptContent) is required for generating concept.", 400);
-        }
-        const result = await generateConcept(String(content), String(movieGenre || ""));
-        return NextResponse.json({
-          ...result,
-          meta: { step, ms: Date.now() - startedAt },
-        });
+        if (!content) return jsonError("script (or scriptContent) is required for generating concept.", 400);
+
+        const result = await withTimeout(
+          generateConcept(String(content), String(movieGenre || "")),
+          120_000,
+          "generateConcept"
+        );
+
+        return NextResponse.json({ ...result, meta: { step, ms: Date.now() - startedAt } });
       }
 
       case "storyboard": {
@@ -318,17 +357,19 @@ export async function POST(request: NextRequest) {
         }
 
         const content = scriptContent || script;
-        if (!content) {
-          return jsonError("script (or scriptContent) is required for storyboard generation.", 400);
-        }
+        if (!content) return jsonError("script (or scriptContent) is required for storyboard generation.", 400);
 
-        const frames: StoryboardFrame[] = await generateStoryboard({
-          movieIdea: String(movieIdea),
-          movieGenre: String(movieGenre),
-          script: String(content),
-          scriptLength: String(scriptLength),
-          characters: (Array.isArray(characters) ? (characters as Character[]) : []) || [],
-        });
+        const frames: StoryboardFrame[] = await withTimeout(
+          generateStoryboard({
+            movieIdea: String(movieIdea),
+            movieGenre: String(movieGenre),
+            script: String(content),
+            scriptLength: String(scriptLength),
+            characters: (Array.isArray(characters) ? (characters as Character[]) : []) || [],
+          }),
+          180_000,
+          "generateStoryboard"
+        );
 
         return NextResponse.json({
           storyboard: (frames || []).map((frame) => ({
@@ -364,14 +405,15 @@ export async function POST(request: NextRequest) {
       }
 
       case "budget": {
-        if (!movieGenre || !scriptLength) {
-          return jsonError("movieGenre and scriptLength are required for budget.", 400);
-        }
-        const result = await generateBudget(String(movieGenre), String(scriptLength));
-        return NextResponse.json({
-          ...result,
-          meta: { step, ms: Date.now() - startedAt },
-        });
+        if (!movieGenre || !scriptLength) return jsonError("movieGenre and scriptLength are required for budget.", 400);
+
+        const result = await withTimeout(
+          generateBudget(String(movieGenre), String(scriptLength)),
+          90_000,
+          "generateBudget"
+        );
+
+        return NextResponse.json({ ...result, meta: { step, ms: Date.now() - startedAt } });
       }
 
       case "schedule": {
@@ -379,40 +421,44 @@ export async function POST(request: NextRequest) {
         if (!content || !scriptLength) {
           return jsonError("script (or scriptContent) and scriptLength are required for schedule.", 400);
         }
-        const result = await generateSchedule(String(content), String(scriptLength));
-        return NextResponse.json({
-          ...result,
-          meta: { step, ms: Date.now() - startedAt },
-        });
+
+        const result = await withTimeout(
+          generateSchedule(String(content), String(scriptLength)),
+          120_000,
+          "generateSchedule"
+        );
+
+        return NextResponse.json({ ...result, meta: { step, ms: Date.now() - startedAt } });
       }
 
       case "locations": {
         const content = scriptContent || script;
-        if (!content) {
-          return jsonError("script (or scriptContent) is required for locations.", 400);
-        }
-        const result = await generateLocations(String(content), String(movieGenre || ""));
-        return NextResponse.json({
-          ...result,
-          meta: { step, ms: Date.now() - startedAt },
-        });
+        if (!content) return jsonError("script (or scriptContent) is required for locations.", 400);
+
+        const result = await withTimeout(
+          generateLocations(String(content), String(movieGenre || "")),
+          120_000,
+          "generateLocations"
+        );
+
+        return NextResponse.json({ ...result, meta: { step, ms: Date.now() - startedAt } });
       }
 
       case "sound": {
         const content = scriptContent || script;
-        if (!content) {
-          return jsonError("script (or scriptContent) is required for sound assets.", 400);
-        }
-        const result = await generateSoundAssets(String(content), String(movieGenre || ""));
-        return NextResponse.json({
-          ...result,
-          meta: { step, ms: Date.now() - startedAt },
-        });
+        if (!content) return jsonError("script (or scriptContent) is required for sound assets.", 400);
+
+        const result = await withTimeout(
+          generateSoundAssets(String(content), String(movieGenre || "")),
+          120_000,
+          "generateSoundAssets"
+        );
+
+        return NextResponse.json({ ...result, meta: { step, ms: Date.now() - startedAt } });
       }
 
-      default: {
+      default:
         return jsonError("Unhandled step.", 400);
-      }
     }
   } catch (error: any) {
     const normalized = normalizeOpenAIError(error);
@@ -426,6 +472,8 @@ export async function POST(request: NextRequest) {
         details: error?.stack || "No stack trace available",
         meta: {
           ms: Date.now() - startedAt,
+          modelText: process.env.OPENAI_MODEL_TEXT || "(unset)",
+          modelJson: process.env.OPENAI_MODEL_JSON || "(unset)",
         },
       },
       { status: normalized.status || 500 }
