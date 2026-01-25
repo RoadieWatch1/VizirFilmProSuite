@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 // ✅ Helps avoid timeouts for long/feature generation on serverless
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 const ALLOWED_STEPS = new Set([
   "characters",
