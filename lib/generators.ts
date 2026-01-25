@@ -569,7 +569,7 @@ async function callOpenAIJsonSchema<T>(
     console.log(`[${tag}] used_schema=false finish=${finish_reason} chars=${content.length} usage=n/a`);
   }
 
-  return { data, content, finish_reason, used_schema: false, meta };
+  return { data, content: content.trim(), finish_reason, used_schema: false, meta };
 }
 
 // ---------- Types ----------
@@ -1735,10 +1735,13 @@ Specifications:
 Return JSON:
 {
   "logline": "...",
-  "synopsis": "${synopsisLength}",
+  "synopsis": "...",
   "themes": ["..."],
   "shortScript": [{"scene":"...","description":"...","dialogue":"..."}]
 }
+
+Constraints:
+- synopsis should be about ${synopsisLength}.
 `.trim();
 
     const metaRes = await callOpenAIJsonSchema<{
@@ -1906,11 +1909,9 @@ ${chunk.beats}
 `.trim();
 
     try {
-      const temp = 1;
-
       // First pass
       const first = await callOpenAIText(chunkPrompt, {
-        temperature: temp,
+        temperature: 1,
         max_tokens: maxTokensPerChunk,
         timeout_ms: DEFAULT_TEXT_CALL_TIMEOUT_MS,
         model: MODEL_TEXT_RAW,
@@ -1954,7 +1955,7 @@ ${chunk.beats}
 Continue the SAME screenplay portion in **Fountain** format.
 
 CRITICAL RULES (no repetition):
-- You MUST continue immediately AFTER the marker [[CHUNK_END]].
+- Continue immediately AFTER where the previous text ends.
 - Do NOT repeat ANY text already written.
 - Begin with the NEXT line of screenplay after the last line shown.
 - Do NOT recap. Do NOT re-introduce characters as if new.
@@ -2074,10 +2075,19 @@ MUST AVOID: ${(plan.mustAvoid || []).join(", ")}\n\n` : ""}${chunk.beats}
     return note;
   });
 
-  // Strip markers, then de-duplicate FADE IN
-  const stitched = stitchedChunks.filter(Boolean).join("\n\n");
-  const noMarkers = stripChunkMarkers(stitched);
-  const scriptFountain = stripExtraFadeIn(noMarkers);
+  // Strip markers and stitch with overlap protection across chunk boundaries
+  let stitched = "";
+  for (const rawChunk of stitchedChunks.filter(Boolean)) {
+    const cleaned = stripChunkMarkers(rawChunk);
+    if (!stitched) {
+      stitched = cleaned.trim();
+      continue;
+    }
+    const addition = removeOverlap(stitched, cleaned, 2200);
+    stitched = `${stitched.trimEnd()}\n\n${addition.trimStart()}`.trim();
+  }
+
+  const scriptFountain = stripExtraFadeIn(stitched);
 
   // Optional debug: final page estimate
   if (FEATURE_DEBUG_CHUNKS) {
@@ -2362,8 +2372,11 @@ Rules:
 // ---------- Sound Assets ----------
 
 export const generateSoundAssets = async (script: string, genre: string) => {
-  const duration = parseInt(script.match(/\d+/)?.[0] || "5", 10);
-  const numAssets = duration <= 15 ? 5 : duration <= 60 ? 8 : 15;
+  // ✅ Derive an approximate runtime from script words instead of "first number in text"
+  const words = countWords(script);
+  const approxMinutes = clampInt(Math.round(words / 220), 5, 180);
+
+  const numAssets = approxMinutes <= 15 ? 5 : approxMinutes <= 60 ? 8 : 15;
 
   const prompt = `
 Given this film script:
@@ -2400,7 +2413,7 @@ Rules:
 
   let soundAssets: any[] = res.data?.soundAssets || [];
 
-  const minDuration = duration >= 60 ? "00:30" : "00:10";
+  const minDuration = approxMinutes >= 60 ? "00:30" : "00:10";
   soundAssets = soundAssets.map((asset) => {
     const [mins, secs] = String(asset.duration || "00:10")
       .split(":")
