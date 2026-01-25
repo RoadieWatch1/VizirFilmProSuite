@@ -15,7 +15,7 @@ import OpenAI from "openai";
  *  - Then try the corresponding `*-chat-latest` alias (for gpt-5 / gpt-5.2)
  *  - Then fall back to a safe model you likely have (default: gpt-4o-mini)
  *
- * ✅ IMPORTANT PARAM NOTE (your current error):
+ * ✅ IMPORTANT PARAM NOTE:
  * Some models reject custom `temperature` values (only default = 1 is supported).
  * To stop `400 Unsupported value: 'temperature'...`, we DO NOT send `temperature`
  * unless you explicitly enable it via env:
@@ -64,10 +64,10 @@ const MODEL_JSON_RAW = (process.env.OPENAI_MODEL_JSON || "gpt-4o-mini").trim(); 
 const FALLBACK_MODEL_TEXT = (process.env.OPENAI_FALLBACK_MODEL_TEXT || "gpt-4o-mini").trim();
 const FALLBACK_MODEL_JSON = (process.env.OPENAI_FALLBACK_MODEL_JSON || "gpt-4o-mini").trim();
 
-// ✅ Temperature sending is OFF by default (fixes your current OpenAI error)
+// ✅ Temperature sending is OFF by default
 const SEND_TEMPERATURE = process.env.OPENAI_SEND_TEMPERATURE === "1";
 
-// ✅ Debug + timeout guards (prevents hidden SDK retries / runaway outline loops)
+// ✅ Debug + timeout guards
 const DEBUG_OUTLINE = process.env.DEBUG_OUTLINE === "1";
 const OUTLINE_USE_JSON_SCHEMA = process.env.OUTLINE_USE_JSON_SCHEMA !== "0"; // set to "0" to force json_object for outline calls
 const OUTLINE_TOTAL_BUDGET_MS = parseInt(process.env.OUTLINE_TOTAL_BUDGET_MS || "120000", 10); // 2 minutes
@@ -77,6 +77,12 @@ const DEFAULT_TEXT_CALL_TIMEOUT_MS = parseInt(process.env.DEFAULT_TEXT_CALL_TIME
 
 // Optional: cap completion tokens to avoid model hard-limit errors (override if you know your model supports more)
 const MAX_COMPLETION_TOKENS_CAP = parseInt(process.env.OPENAI_MAX_COMPLETION_TOKENS_CAP || "8192", 10);
+
+// Feature writing enforcement (new)
+const FEATURE_CONTINUE_PASSES = clampInt(parseInt(process.env.FEATURE_CONTINUE_PASSES || "2", 10), 0, 4);
+const FEATURE_MIN_WORD_RATIO = clampFloat(parseFloat(process.env.FEATURE_MIN_WORD_RATIO || "0.9"), 0.5, 0.98);
+const FEATURE_CONTINUE_TAIL_CHARS = clampInt(parseInt(process.env.FEATURE_CONTINUE_TAIL_CHARS || "2200", 10), 800, 6000);
+const FEATURE_DEBUG_CHUNKS = process.env.FEATURE_DEBUG_CHUNKS === "1";
 
 // ---------- Helpers for OpenAI calls ----------
 
@@ -172,7 +178,7 @@ function pickCompletionParams(options: ChatOptions) {
   // Only include keys OpenAI accepts — prevents “unknown param” crashes.
   const out: any = {};
 
-  // ✅ Temperature is OFF by default to avoid the model error you hit
+  // ✅ Temperature is OFF by default
   if (SEND_TEMPERATURE && typeof options.temperature === "number") {
     out.temperature = options.temperature;
   }
@@ -447,9 +453,6 @@ FORMAT RULES:
 
 /**
  * ✅ Structured Outputs helper for schema-locked JSON.
- * - Treats finish_reason === "length" as failure (prevents parsing truncated JSON).
- * - Client retries are disabled by default in getOpenAI() to avoid Vercel timeout spirals.
- * - Allows forcing json_object mode via OUTLINE_USE_JSON_SCHEMA=0 or options.force_json_object.
  */
 async function callOpenAIJsonSchema<T>(
   prompt: string,
@@ -500,8 +503,6 @@ async function callOpenAIJsonSchema<T>(
           },
           ...pickCompletionParams({
             ...options,
-            // If OPENAI_SEND_TEMPERATURE=1, you can still set this,
-            // but some models will reject non-default values; wrapper retries without temperature.
             temperature: typeof options.temperature === "number" ? options.temperature : 0.3,
             max_tokens: typeof options.max_tokens === "number" ? options.max_tokens : 4500,
             max_completion_tokens:
@@ -619,9 +620,93 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
+function clampInt(n: number, min: number, max: number) {
+  const v = Number.isFinite(n) ? Math.trunc(n) : min;
+  return clamp(v, min, max);
+}
+
+function clampFloat(n: number, min: number, max: number) {
+  const v = Number.isFinite(n) ? n : min;
+  return clamp(v, min, max);
+}
+
 function tail(text: string, maxChars = 4000) {
   if (!text) return "";
   return text.length > maxChars ? text.slice(-maxChars) : text;
+}
+
+function countWords(text: string) {
+  const t = String(text || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/[^\S\r\n]+/g, " ")
+    .trim();
+  if (!t) return 0;
+  return t.split(/\s+/).filter(Boolean).length;
+}
+
+function estimatePagesFromWords(words: number, wordsPerPage = 220) {
+  if (!wordsPerPage || wordsPerPage <= 0) return 0;
+  return Math.max(1, Math.round(words / wordsPerPage));
+}
+
+function stripChunkMarkers(text: string) {
+  return String(text || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/^\s*\[\[CHUNK_END\]\]\s*$/gim, "")
+    .replace(/^\s*\[\[CHUNK_CONTINUE\]\]\s*$/gim, "")
+    .trim();
+}
+
+function normalizeNewlines(text: string) {
+  return String(text || "").replace(/\r\n/g, "\n");
+}
+
+function lastNonEmptyLine(text: string) {
+  const lines = normalizeNewlines(text).split("\n").map((l) => l.trimEnd());
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const v = (lines[i] || "").trim();
+    if (v) return v;
+  }
+  return "";
+}
+
+function extractLastSlugline(text: string) {
+  const lines = normalizeNewlines(text).split("\n");
+  const re = /^\s*(INT\.|EXT\.|INT\/EXT\.|EXT\/INT\.|I\/E\.)\s+/i;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const ln = (lines[i] || "").trim();
+    if (re.test(ln)) return ln;
+  }
+  return "";
+}
+
+/**
+ * Removes repeated overlap when continuation starts by reprinting the tail.
+ * Finds the largest suffix of `prev` that is also a prefix of `next` (up to maxScan chars).
+ */
+function removeOverlap(prev: string, next: string, maxScan = 1600) {
+  const a = normalizeNewlines(prev);
+  const b = normalizeNewlines(next);
+  if (!a || !b) return b;
+
+  const aTail = a.slice(Math.max(0, a.length - maxScan));
+  const maxK = Math.min(aTail.length, b.length);
+
+  // try longer overlaps first
+  for (let k = maxK; k >= 80; k--) {
+    const suffix = aTail.slice(aTail.length - k);
+    if (b.startsWith(suffix)) {
+      return b.slice(k).trimStart();
+    }
+  }
+
+  // also guard if it repeats the exact last line
+  const lastLine = lastNonEmptyLine(a);
+  if (lastLine && b.startsWith(lastLine)) {
+    return b.slice(lastLine.length).trimStart();
+  }
+
+  return b;
 }
 
 function parseLengthToMinutes(raw: string): number {
@@ -789,7 +874,6 @@ function buildCharactersSchema() {
 }
 
 function buildStoryboardSchema() {
-  // We normalize counts in code, so schema allows a range.
   const shotSchema = {
     type: "object",
     additionalProperties: false,
@@ -1307,14 +1391,18 @@ ACT ${a.act} SUMMARY:
 ${a.summary}
 `.trim();
 
-      const res = await callOpenAIJsonSchema<{ shortScript: ShortScriptItem[] }>(prompt, buildActScenesSchema(a.count), {
-        temperature: attempt === 2 ? 0.22 : 0.28,
-        max_tokens: attempt === 2 ? 1600 : 2100,
-        request_tag: `outline-act${a.act}-scenes-a${attempt}`,
-        schema_name: `OutlineAct${a.act}Scenes`,
-        timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
-        debug: true,
-      });
+      const res = await callOpenAIJsonSchema<{ shortScript: ShortScriptItem[] }>(
+        prompt,
+        buildActScenesSchema(a.count),
+        {
+          temperature: attempt === 2 ? 0.22 : 0.28,
+          max_tokens: attempt === 2 ? 1600 : 2100,
+          request_tag: `outline-act${a.act}-scenes-a${attempt}`,
+          schema_name: `OutlineAct${a.act}Scenes`,
+          timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
+          debug: true,
+        }
+      );
 
       if (res.data?.shortScript?.length === a.count) {
         actScenes = res.data.shortScript.map((s, idx) => ({
@@ -1689,7 +1777,7 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
 `.trim();
 
     const { content: scriptText } = await callOpenAIText(writePrompt, {
-      temperature: 1, // safe default; only sent if OPENAI_SEND_TEMPERATURE=1
+      temperature: 1,
       max_tokens: 4096,
       model: MODEL_TEXT_RAW,
       request_tag: "short-script",
@@ -1716,20 +1804,23 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
   const shortScript: ShortScriptItem[] = outlineParsed.shortScript || [];
   const effectiveScenes = Math.max(1, shortScript.length || approxScenes);
 
+  // Tuned chunk count: fewer, larger chunks for epic features → better continuity + longer pages
   const chunkCount =
     targetPages <= 45 ? 4 :
     targetPages <= 70 ? 6 :
     targetPages <= 95 ? 8 :
+    targetPages <= 120 ? 9 :
     10;
 
   const safeChunkCount = Math.min(chunkCount, effectiveScenes);
   const pagesPerChunk = Math.ceil(targetPages / safeChunkCount);
 
-  const minWords = Math.max(900, Math.round(pagesPerChunk * 210));
-  const aimWords = Math.max(minWords, Math.round(pagesPerChunk * 235));
-  const maxWords = Math.max(aimWords + 200, Math.round(pagesPerChunk * 255));
+  const minWords = Math.max(1000, Math.round(pagesPerChunk * 210));
+  const aimWords = Math.max(minWords, Math.round(pagesPerChunk * 245));
+  const maxWords = Math.max(aimWords + 250, Math.round(pagesPerChunk * 275));
 
-  const maxTokensPerChunk = clamp(Math.round(maxWords * 1.35), 4200, 12000);
+  // Heavier budgets for 120-min features
+  const maxTokensPerChunk = clamp(Math.round(maxWords * 1.45), 5200, 12000);
 
   const chunkRanges = Array.from({ length: safeChunkCount }, (_, idx) => {
     const startScene = Math.floor(idx * (effectiveScenes / safeChunkCount)) + 1;
@@ -1763,6 +1854,10 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
   const envConc = parseInt(process.env.SCRIPT_CHUNK_CONCURRENCY || "4", 10);
   const chunkConcurrency = clamp(Number.isFinite(envConc) ? envConc : 4, 1, 6);
 
+  function logChunk(tag: string, data: any) {
+    if (FEATURE_DEBUG_CHUNKS) console.log(`[feature-chunk] ${tag}`, data);
+  }
+
   async function generateOneChunk(
     chunk: { part: number; startScene: number; endScene: number; beats: string },
     index: number,
@@ -1771,6 +1866,7 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     await delay((index % chunkConcurrency) * 300);
 
     const isStart = index === 0;
+    const isFinal = index === chunkInputs.length - 1;
     const plan = plans?.[index];
 
     const chunkPrompt = `
@@ -1783,16 +1879,20 @@ Synopsis: ${outlineParsed.synopsis}
 Themes: ${(outlineParsed.themes || []).slice(0, 6).join(", ")}
 
 SCOPE:
-- This is the portion covering scenes #${chunk.startScene} through #${chunk.endScene}.
-- Length target: Aim for ~${aimWords} words (range ${minWords}–${maxWords}).
-- EXPAND the beats into full scenes with rich dialogue and cinematic action.
-- Do NOT summarize. Write the actual screenplay.
+- This portion covers scenes #${chunk.startScene} through #${chunk.endScene}.
+- LENGTH REQUIREMENT: Minimum ${minWords} words (target ~${aimWords}, max ~${maxWords}).
+- Scenes must feel like real screenplay pages: action beats + dialogue exchanges + blocking.
+- Avoid summarizing. Write the actual screenplay lines.
 
 FORMAT RULES:
 - ${isStart ? 'Include "FADE IN:" exactly once at the very start.' : 'Do NOT include "FADE IN:". Start with the first scene heading.'}
-- Use slug lines frequently.
-- Action in present tense.
+- Use proper slug lines (INT./EXT.) and write cinematic action + dialogue.
 - No meta labels like "PART ${chunk.part}".
+- ${isFinal ? "You MAY end with a satisfying final beat (but no meta text)." : "DO NOT conclude the overall story. DO NOT write THE END."}
+
+CONTINUATION MARKER (IMPORTANT):
+- At the END of your output, print this exact line on its own line:
+[[CHUNK_END]]
 
 ${plan ? `CONTINUITY CONSTRAINTS:
 START STATE: ${plan.startState}
@@ -1806,9 +1906,10 @@ ${chunk.beats}
 `.trim();
 
     try {
-      const temp = attempt >= 2 ? 1 : 1; // safe default; only sent if OPENAI_SEND_TEMPERATURE=1
+      const temp = 1;
 
-      const { content } = await callOpenAIText(chunkPrompt, {
+      // First pass
+      const first = await callOpenAIText(chunkPrompt, {
         temperature: temp,
         max_tokens: maxTokensPerChunk,
         timeout_ms: DEFAULT_TEXT_CALL_TIMEOUT_MS,
@@ -1816,9 +1917,112 @@ ${chunk.beats}
         request_tag: `feature-chunk-${chunk.part}-a${attempt}`,
       });
 
-      const cleaned = (content || "").trim();
-      if (!cleaned) throw new Error("Empty chunk content");
-      return { ok: true, content: cleaned };
+      let combined = normalizeNewlines(first.content || "").trim();
+      if (!combined) throw new Error("Empty chunk content");
+
+      // Ensure marker exists (even if model forgets)
+      if (!/^\s*\[\[CHUNK_END\]\]\s*$/im.test(combined)) {
+        combined = `${combined}\n\n[[CHUNK_END]]\n`;
+      }
+
+      // Enforce minimum length with CONTINUE passes (new)
+      const minTarget = Math.round(minWords * FEATURE_MIN_WORD_RATIO);
+
+      let words = countWords(stripChunkMarkers(combined));
+      logChunk(`part-${chunk.part}-initial`, {
+        words,
+        minTarget,
+        minWords,
+        aimWords,
+        maxWords,
+        startScene: chunk.startScene,
+        endScene: chunk.endScene,
+      });
+
+      for (let pass = 1; pass <= FEATURE_CONTINUE_PASSES; pass++) {
+        if (words >= minTarget) break;
+
+        const prevClean = stripChunkMarkers(combined);
+        const tailText = tail(prevClean, FEATURE_CONTINUE_TAIL_CHARS);
+        const lastLine = lastNonEmptyLine(prevClean);
+        const lastSlug = extractLastSlugline(prevClean);
+
+        const needMore = minTarget - words;
+        const addWordsTarget = clampInt(Math.round(needMore * 1.15), 350, Math.round(aimWords * 0.7));
+
+        const continuePrompt = `
+Continue the SAME screenplay portion in **Fountain** format.
+
+CRITICAL RULES (no repetition):
+- You MUST continue immediately AFTER the marker [[CHUNK_END]].
+- Do NOT repeat ANY text already written.
+- Begin with the NEXT line of screenplay after the last line shown.
+- Do NOT recap. Do NOT re-introduce characters as if new.
+- If you're still in the same scene, continue that scene.
+- If that scene naturally ends, move to the next scene (still within scenes #${chunk.startScene}–#${chunk.endScene}).
+
+LENGTH:
+- Add at least ~${addWordsTarget} new words of screenplay text (dialogue + action).
+- Keep it cinematic. Expand beats with blocking, subtext, and physical business.
+
+DO NOT:
+- Do not output "FADE IN:".
+- ${isFinal ? "Avoid meta text. No headings like PART." : "Do NOT conclude the overall story. Do NOT write THE END."}
+
+Anchor (last slugline if any): ${lastSlug || "(none found)"}
+Exact last line (do NOT repeat it): ${lastLine || "(none)"}
+
+LAST_OUTPUT_TAIL (for continuity; do NOT copy it):
+<<<
+${tailText}
+>>>
+
+Beats reminder (do NOT repeat scenes already covered; continue forward):
+${chunk.beats}
+
+At the END of your continuation, print:
+[[CHUNK_END]]
+`.trim();
+
+        const cont = await callOpenAIText(continuePrompt, {
+          temperature: 1,
+          max_tokens: maxTokensPerChunk,
+          timeout_ms: DEFAULT_TEXT_CALL_TIMEOUT_MS,
+          model: MODEL_TEXT_RAW,
+          request_tag: `feature-chunk-${chunk.part}-continue-${pass}`,
+        });
+
+        let contText = normalizeNewlines(cont.content || "").trim();
+        if (!contText) break;
+
+        // Ensure marker exists
+        if (!/^\s*\[\[CHUNK_END\]\]\s*$/im.test(contText)) {
+          contText = `${contText}\n\n[[CHUNK_END]]\n`;
+        }
+
+        // Remove overlap if model repeats the tail
+        const prevNoMarker = stripChunkMarkers(combined);
+        const contNoMarker = stripChunkMarkers(contText);
+        const cleanedContNoMarker = removeOverlap(prevNoMarker, contNoMarker, 2000);
+
+        // Rebuild combined with a single marker at end
+        combined = `${prevNoMarker.trim()}\n\n${cleanedContNoMarker.trim()}\n\n[[CHUNK_END]]\n`;
+
+        words = countWords(stripChunkMarkers(combined));
+
+        logChunk(`part-${chunk.part}-continue-${pass}`, {
+          words,
+          minTarget,
+          addWordsTarget,
+          lastSlug: lastSlug || null,
+        });
+      }
+
+      // Final safety trim
+      combined = combined.trim();
+      if (!combined) throw new Error("Chunk became empty after processing");
+
+      return { ok: true, content: combined };
     } catch (error) {
       return { ok: false, content: "", error };
     }
@@ -1870,8 +2074,16 @@ MUST AVOID: ${(plan.mustAvoid || []).join(", ")}\n\n` : ""}${chunk.beats}
     return note;
   });
 
+  // Strip markers, then de-duplicate FADE IN
   const stitched = stitchedChunks.filter(Boolean).join("\n\n");
-  const scriptFountain = stripExtraFadeIn(stitched);
+  const noMarkers = stripChunkMarkers(stitched);
+  const scriptFountain = stripExtraFadeIn(noMarkers);
+
+  // Optional debug: final page estimate
+  if (FEATURE_DEBUG_CHUNKS) {
+    const w = countWords(scriptFountain);
+    console.log("[feature-script] final words/pages", { words: w, estPages: estimatePagesFromWords(w, 220), targetPages });
+  }
 
   return {
     logline: outlineParsed.logline,
@@ -1963,7 +2175,6 @@ Return JSON with key "storyboard" containing array of main frames, each optional
   let frames = res.data?.storyboard || [];
   frames = Array.isArray(frames) ? frames : [];
 
-  // Normalize: ensure imageUrl exists, coverageShots exists
   frames = frames.map((f, idx) => ({
     ...f,
     shotNumber: String(f.shotNumber || `${idx + 1}`),

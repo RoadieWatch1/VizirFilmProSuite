@@ -19,7 +19,12 @@ export const runtime = "nodejs";
 // ✅ Works only if Vercel Project Settings → Functions → Default Max Duration is set to 800
 export const maxDuration = 800;
 
+// ✅ Optional: keep LLM payload sizes sane for step-mode analysis calls
+const STEP_SCRIPT_TRIM_CHARS = parseInt(process.env.STEP_SCRIPT_TRIM_CHARS || "24000", 10);
+
+// ✅ Allow step-mode for script-only generation too (useful for debugging)
 const ALLOWED_STEPS = new Set([
+  "script",
   "characters",
   "concept",
   "storyboard",
@@ -31,6 +36,17 @@ const ALLOWED_STEPS = new Set([
 
 function jsonError(message: string, status = 400, extra?: Record<string, any>) {
   return NextResponse.json({ error: message, ...(extra || {}) }, { status });
+}
+
+function makeRequestId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function truncateText(input: any, maxChars: number) {
+  const s = String(input ?? "");
+  if (!s) return "";
+  if (!Number.isFinite(maxChars) || maxChars <= 0) return s;
+  return s.length > maxChars ? s.slice(0, maxChars) : s;
 }
 
 /** Parse flexible duration strings:
@@ -82,46 +98,64 @@ function countScenes(text: string): number {
 
 function normalizeOpenAIError(error: any): { status: number; message: string; hint?: string } {
   const msg = String(error?.message || "");
+  const lower = msg.toLowerCase();
   const code = String(error?.code || error?.error?.code || "");
   const statusRaw = Number(error?.status || error?.response?.status || 500);
   const status = statusRaw >= 400 && statusRaw <= 599 ? statusRaw : 500;
+
+  // ✅ Missing env var (build-safe init throws this)
+  if (lower.includes("missing openai_api_key") || lower.includes("missing openai api key")) {
+    return {
+      status: 500,
+      message: msg || "Missing OPENAI_API_KEY.",
+      hint:
+        "Fix: Set OPENAI_API_KEY in Vercel → Project Settings → Environment Variables (Production + Preview), then redeploy.",
+    };
+  }
 
   // ✅ Auth / API key
   if (
     status === 401 ||
     code === "invalid_api_key" ||
-    msg.toLowerCase().includes("invalid api key") ||
-    msg.toLowerCase().includes("incorrect api key")
+    lower.includes("invalid api key") ||
+    lower.includes("incorrect api key")
   ) {
     return {
       status: 401,
       message: msg || "Invalid OpenAI API key.",
       hint:
-        "Fix: confirm OPENAI_API_KEY is set in Vercel (Production + Preview) and redeploy. Make sure you pasted the full key and it belongs to the right OpenAI project.",
+        "Fix: confirm OPENAI_API_KEY is set in Vercel (Production + Preview) and redeploy. Make sure the key belongs to the correct OpenAI project.",
     };
   }
 
-  // ✅ Model access / not found
+  // ✅ Model access / not found (common current issue: 403 project does not have access to model)
   if (
+    status === 403 ||
     code === "model_not_found" ||
     msg.includes("does not have access to model") ||
-    msg.includes("model_not_found")
+    msg.includes("model_not_found") ||
+    lower.includes("no such model") ||
+    lower.includes("not found")
   ) {
+    const hint =
+      "Fix: Set Vercel env vars OPENAI_MODEL_TEXT and OPENAI_MODEL_JSON to a model your OpenAI *project* can access. " +
+      "If you used a dated model like `gpt-4o-mini-2024-07-18` and got blocked, switch to `gpt-4o-mini` (or another model shown as allowed in your OpenAI Project settings), then redeploy. " +
+      "You can also set OPENAI_FALLBACK_MODEL_TEXT / OPENAI_FALLBACK_MODEL_JSON to `gpt-4o-mini`.";
+
     return {
-      status: 400,
+      status: status === 403 ? 403 : 400,
       message: msg || "Your OpenAI project does not have access to the requested model.",
-      hint:
-        "Fix: set Vercel env vars OPENAI_MODEL_TEXT and OPENAI_MODEL_JSON to a model your project can access (if gpt-5.2 access fails, switch to a model you explicitly allowed in OpenAI Project settings).",
+      hint,
     };
   }
 
   // ✅ Model param restrictions (temperature not supported)
-  if (msg.toLowerCase().includes("unsupported value") && msg.toLowerCase().includes("temperature")) {
+  if (lower.includes("unsupported value") && lower.includes("temperature")) {
     return {
       status: 400,
       message: msg,
       hint:
-        "Fix: your selected model does NOT support temperature overrides. In lib/generators.ts, remove temperature from calls (or only set it when the model supports it). Redeploy after updating.",
+        "Fix: your selected model does NOT support temperature overrides. Keep OPENAI_SEND_TEMPERATURE unset (or 0). If set, set OPENAI_SEND_TEMPERATURE=0 and redeploy.",
     };
   }
 
@@ -135,8 +169,18 @@ function normalizeOpenAIError(error: any): { status: number; message: string; hi
     };
   }
 
+  // ✅ Quota / billing
+  if (status === 402 || code === "insufficient_quota" || lower.includes("insufficient quota")) {
+    return {
+      status: 402,
+      message: msg || "Insufficient quota.",
+      hint:
+        "Fix: check your OpenAI billing / usage limits for this project, and ensure the API key belongs to the project with quota.",
+    };
+  }
+
   // ✅ Rate limit
-  if (status === 429 || code === "rate_limit_exceeded" || msg.toLowerCase().includes("rate limit")) {
+  if (status === 429 || code === "rate_limit_exceeded" || lower.includes("rate limit")) {
     return {
       status: 429,
       message: msg || "Rate limit exceeded.",
@@ -146,12 +190,7 @@ function normalizeOpenAIError(error: any): { status: number; message: string; hi
   }
 
   // ✅ Timeouts
-  if (
-    msg.toLowerCase().includes("timeout") ||
-    msg.toLowerCase().includes("timed out") ||
-    msg.includes("ETIMEDOUT") ||
-    msg.includes("AbortError")
-  ) {
+  if (lower.includes("timeout") || lower.includes("timed out") || msg.includes("ETIMEDOUT") || msg.includes("AbortError")) {
     return {
       status: 504,
       message: msg || "Request timed out.",
@@ -182,11 +221,11 @@ async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise
   }
 }
 
-async function generateScriptData(movieIdea: string, movieGenre: string, scriptLength: string) {
+async function generateScriptData(movieIdea: string, movieGenre: string, scriptLength: string, requestId: string) {
   const minutes = parseDurationToMinutes(scriptLength);
   const normalizedLength = `${minutes} min`;
 
-  console.log("Generating script data with:", {
+  console.log(`[${requestId}] Generating script data with:`, {
     movieIdea: !!movieIdea,
     movieGenre,
     requestedLength: scriptLength,
@@ -195,7 +234,10 @@ async function generateScriptData(movieIdea: string, movieGenre: string, scriptL
     // ✅ Safe env echo (helps catch “wrong project/env vars not deployed”)
     modelText: process.env.OPENAI_MODEL_TEXT || "(unset)",
     modelJson: process.env.OPENAI_MODEL_JSON || "(unset)",
+    fallbackText: process.env.OPENAI_FALLBACK_MODEL_TEXT || "(unset)",
+    fallbackJson: process.env.OPENAI_FALLBACK_MODEL_JSON || "(unset)",
     vercelMaxDuration: String(maxDuration),
+    stepScriptTrimChars: STEP_SCRIPT_TRIM_CHARS,
   });
 
   // ✅ Script generation can take a while. Keep a route-side guard too.
@@ -209,24 +251,25 @@ async function generateScriptData(movieIdea: string, movieGenre: string, scriptL
     throw new Error("Script generator returned empty scriptText.");
   }
 
-  // Characters (better after script exists)
+  // Characters (better after script exists) — trim for safety
   let characters: Character[] = [];
   try {
+    const trimmedForChars = truncateText(scriptText, STEP_SCRIPT_TRIM_CHARS);
     const charactersResult = await withTimeout(
-      generateCharacters(scriptText, movieGenre),
+      generateCharacters(trimmedForChars, movieGenre),
       120_000,
       "generateCharacters"
     );
     characters = charactersResult.characters || [];
-    console.log(`Generated ${characters.length} characters`);
+    console.log(`[${requestId}] Generated ${characters.length} characters`);
   } catch (err) {
-    console.error("Failed to generate characters:", err);
+    console.error(`[${requestId}] Failed to generate characters:`, err);
   }
 
   // Stats
   const estPages = estimatePagesByWords(scriptText, 220);
   const sceneCount = countScenes(scriptText);
-  console.log("Script stats:", {
+  console.log(`[${requestId}] Script stats:`, {
     estPages,
     targetMinutes: minutes,
     sceneCount,
@@ -250,6 +293,7 @@ async function generateScriptData(movieIdea: string, movieGenre: string, scriptL
 }
 
 export async function POST(request: NextRequest) {
+  const requestId = makeRequestId();
   const startedAt = Date.now();
   let body: any = {};
 
@@ -273,7 +317,7 @@ export async function POST(request: NextRequest) {
     const step = String(rawStep || "").trim().toLowerCase();
     const isStepMode = !!step;
 
-    console.log("Received request:", {
+    console.log(`[${requestId}] Received request:`, {
       step,
       isStepMode,
       movieIdea: !!movieIdea,
@@ -285,24 +329,34 @@ export async function POST(request: NextRequest) {
       charactersCount: Array.isArray(characters) ? characters.length : 0,
       modelText: process.env.OPENAI_MODEL_TEXT || "(unset)",
       modelJson: process.env.OPENAI_MODEL_JSON || "(unset)",
+      fallbackText: process.env.OPENAI_FALLBACK_MODEL_TEXT || "(unset)",
+      fallbackJson: process.env.OPENAI_FALLBACK_MODEL_JSON || "(unset)",
       // If this logs 800 but Vercel still kills at 300, you're not on the deployment you think you are.
       vercelMaxDuration: String(maxDuration),
+      stepScriptTrimChars: STEP_SCRIPT_TRIM_CHARS,
     });
 
     if (isStepMode && !ALLOWED_STEPS.has(step)) {
-      return jsonError(`Invalid step "${step}". Allowed: ${Array.from(ALLOWED_STEPS).join(", ")}`, 400);
+      return jsonError(
+        `Invalid step "${step}". Allowed: ${Array.from(ALLOWED_STEPS).join(", ")}`,
+        400,
+        { requestId }
+      );
     }
 
     // If NOT step mode, we’re generating the full package (script + meta)
     if (!isStepMode) {
       if (!movieIdea || !movieGenre || !scriptLength) {
-        return jsonError("movieIdea, movieGenre, and scriptLength are required for script generation.", 400);
+        return jsonError("movieIdea, movieGenre, and scriptLength are required for script generation.", 400, {
+          requestId,
+        });
       }
 
-      const scriptResult = await generateScriptData(String(movieIdea), String(movieGenre), String(scriptLength));
+      const scriptResult = await generateScriptData(String(movieIdea), String(movieGenre), String(scriptLength), requestId);
       const minutes = parseDurationToMinutes(String(scriptLength));
 
       return NextResponse.json({
+        requestId,
         idea: movieIdea,
         genre: movieGenre,
         length: `${minutes} min`,
@@ -319,15 +373,46 @@ export async function POST(request: NextRequest) {
           ms: Date.now() - startedAt,
           modelText: process.env.OPENAI_MODEL_TEXT || "(unset)",
           modelJson: process.env.OPENAI_MODEL_JSON || "(unset)",
+          fallbackText: process.env.OPENAI_FALLBACK_MODEL_TEXT || "(unset)",
+          fallbackJson: process.env.OPENAI_FALLBACK_MODEL_JSON || "(unset)",
         },
       });
     }
 
     // Step mode handlers
     switch (step) {
+      case "script": {
+        if (!movieIdea || !movieGenre || !scriptLength) {
+          return jsonError("movieIdea, movieGenre, and scriptLength are required for script generation.", 400, {
+            requestId,
+          });
+        }
+
+        const scriptResult = await generateScriptData(String(movieIdea), String(movieGenre), String(scriptLength), requestId);
+        const minutes = parseDurationToMinutes(String(scriptLength));
+
+        return NextResponse.json({
+          requestId,
+          idea: movieIdea,
+          genre: movieGenre,
+          length: `${minutes} min`,
+          logline: scriptResult.logline,
+          synopsis: scriptResult.synopsis,
+          script: scriptResult.scriptText,
+          scriptText: scriptResult.scriptText,
+          shortScript: scriptResult.shortScript,
+          themes: scriptResult.themes,
+          characters: scriptResult.characters,
+          stats: scriptResult.stats,
+          meta: { step, ms: Date.now() - startedAt },
+        });
+      }
+
       case "characters": {
-        const content = scriptContent || script;
-        if (!content) return jsonError("scriptContent (or script) is required for generating characters.", 400);
+        const contentRaw = scriptContent || script;
+        if (!contentRaw) return jsonError("scriptContent (or script) is required for generating characters.", 400, { requestId });
+
+        const content = truncateText(contentRaw, STEP_SCRIPT_TRIM_CHARS);
 
         const result = await withTimeout(
           generateCharacters(String(content), String(movieGenre || "")),
@@ -335,12 +420,14 @@ export async function POST(request: NextRequest) {
           "generateCharacters"
         );
 
-        return NextResponse.json({ ...result, meta: { step, ms: Date.now() - startedAt } });
+        return NextResponse.json({ requestId, ...result, meta: { step, ms: Date.now() - startedAt } });
       }
 
       case "concept": {
-        const content = scriptContent || script;
-        if (!content) return jsonError("script (or scriptContent) is required for generating concept.", 400);
+        const contentRaw = scriptContent || script;
+        if (!contentRaw) return jsonError("script (or scriptContent) is required for generating concept.", 400, { requestId });
+
+        const content = truncateText(contentRaw, STEP_SCRIPT_TRIM_CHARS);
 
         const result = await withTimeout(
           generateConcept(String(content), String(movieGenre || "")),
@@ -348,16 +435,18 @@ export async function POST(request: NextRequest) {
           "generateConcept"
         );
 
-        return NextResponse.json({ ...result, meta: { step, ms: Date.now() - startedAt } });
+        return NextResponse.json({ requestId, ...result, meta: { step, ms: Date.now() - startedAt } });
       }
 
       case "storyboard": {
         if (!movieIdea || !movieGenre || !scriptLength) {
-          return jsonError("movieIdea, movieGenre, and scriptLength are required for storyboard.", 400);
+          return jsonError("movieIdea, movieGenre, and scriptLength are required for storyboard.", 400, { requestId });
         }
 
-        const content = scriptContent || script;
-        if (!content) return jsonError("script (or scriptContent) is required for storyboard generation.", 400);
+        const contentRaw = scriptContent || script;
+        if (!contentRaw) return jsonError("script (or scriptContent) is required for storyboard generation.", 400, { requestId });
+
+        const content = truncateText(contentRaw, STEP_SCRIPT_TRIM_CHARS);
 
         const frames: StoryboardFrame[] = await withTimeout(
           generateStoryboard({
@@ -372,6 +461,7 @@ export async function POST(request: NextRequest) {
         );
 
         return NextResponse.json({
+          requestId,
           storyboard: (frames || []).map((frame) => ({
             scene: frame.scene,
             shotNumber: frame.shotNumber,
@@ -405,7 +495,7 @@ export async function POST(request: NextRequest) {
       }
 
       case "budget": {
-        if (!movieGenre || !scriptLength) return jsonError("movieGenre and scriptLength are required for budget.", 400);
+        if (!movieGenre || !scriptLength) return jsonError("movieGenre and scriptLength are required for budget.", 400, { requestId });
 
         const result = await withTimeout(
           generateBudget(String(movieGenre), String(scriptLength)),
@@ -413,14 +503,16 @@ export async function POST(request: NextRequest) {
           "generateBudget"
         );
 
-        return NextResponse.json({ ...result, meta: { step, ms: Date.now() - startedAt } });
+        return NextResponse.json({ requestId, ...result, meta: { step, ms: Date.now() - startedAt } });
       }
 
       case "schedule": {
-        const content = scriptContent || script;
-        if (!content || !scriptLength) {
-          return jsonError("script (or scriptContent) and scriptLength are required for schedule.", 400);
+        const contentRaw = scriptContent || script;
+        if (!contentRaw || !scriptLength) {
+          return jsonError("script (or scriptContent) and scriptLength are required for schedule.", 400, { requestId });
         }
+
+        const content = truncateText(contentRaw, STEP_SCRIPT_TRIM_CHARS);
 
         const result = await withTimeout(
           generateSchedule(String(content), String(scriptLength)),
@@ -428,12 +520,14 @@ export async function POST(request: NextRequest) {
           "generateSchedule"
         );
 
-        return NextResponse.json({ ...result, meta: { step, ms: Date.now() - startedAt } });
+        return NextResponse.json({ requestId, ...result, meta: { step, ms: Date.now() - startedAt } });
       }
 
       case "locations": {
-        const content = scriptContent || script;
-        if (!content) return jsonError("script (or scriptContent) is required for locations.", 400);
+        const contentRaw = scriptContent || script;
+        if (!contentRaw) return jsonError("script (or scriptContent) is required for locations.", 400, { requestId });
+
+        const content = truncateText(contentRaw, STEP_SCRIPT_TRIM_CHARS);
 
         const result = await withTimeout(
           generateLocations(String(content), String(movieGenre || "")),
@@ -441,12 +535,14 @@ export async function POST(request: NextRequest) {
           "generateLocations"
         );
 
-        return NextResponse.json({ ...result, meta: { step, ms: Date.now() - startedAt } });
+        return NextResponse.json({ requestId, ...result, meta: { step, ms: Date.now() - startedAt } });
       }
 
       case "sound": {
-        const content = scriptContent || script;
-        if (!content) return jsonError("script (or scriptContent) is required for sound assets.", 400);
+        const contentRaw = scriptContent || script;
+        if (!contentRaw) return jsonError("script (or scriptContent) is required for sound assets.", 400, { requestId });
+
+        const content = truncateText(contentRaw, STEP_SCRIPT_TRIM_CHARS);
 
         const result = await withTimeout(
           generateSoundAssets(String(content), String(movieGenre || "")),
@@ -454,19 +550,20 @@ export async function POST(request: NextRequest) {
           "generateSoundAssets"
         );
 
-        return NextResponse.json({ ...result, meta: { step, ms: Date.now() - startedAt } });
+        return NextResponse.json({ requestId, ...result, meta: { step, ms: Date.now() - startedAt } });
       }
 
       default:
-        return jsonError("Unhandled step.", 400);
+        return jsonError("Unhandled step.", 400, { requestId });
     }
   } catch (error: any) {
     const normalized = normalizeOpenAIError(error);
 
-    console.error("[API] Generation error:", error, { input: body || "No input available" });
+    console.error(`[${requestId}] [API] Generation error:`, error, { input: body || "No input available" });
 
     return NextResponse.json(
       {
+        requestId,
         error: normalized.message || "Failed to generate film package. Please try again later.",
         hint: normalized.hint,
         details: error?.stack || "No stack trace available",
@@ -474,6 +571,8 @@ export async function POST(request: NextRequest) {
           ms: Date.now() - startedAt,
           modelText: process.env.OPENAI_MODEL_TEXT || "(unset)",
           modelJson: process.env.OPENAI_MODEL_JSON || "(unset)",
+          fallbackText: process.env.OPENAI_FALLBACK_MODEL_TEXT || "(unset)",
+          fallbackJson: process.env.OPENAI_FALLBACK_MODEL_JSON || "(unset)",
         },
       },
       { status: normalized.status || 500 }
