@@ -22,6 +22,9 @@ export const maxDuration = 800;
 // ✅ Optional: keep LLM payload sizes sane for step-mode analysis calls
 const STEP_SCRIPT_TRIM_CHARS = parseInt(process.env.STEP_SCRIPT_TRIM_CHARS || "24000", 10);
 
+// ✅ Page/words calibration (sync with lib/generators.ts)
+const SCRIPT_WORDS_PER_PAGE = Math.max(160, Math.min(320, parseInt(process.env.SCRIPT_WORDS_PER_PAGE || "220", 10)));
+
 // ✅ Allow step-mode for script-only generation too (useful for debugging)
 const ALLOWED_STEPS = new Set([
   "script",
@@ -91,7 +94,7 @@ function countWords(text: string): number {
     .filter(Boolean).length;
 }
 
-function estimatePagesByWords(text: string, wordsPerPage = 220): number {
+function estimatePagesByWords(text: string, wordsPerPage = SCRIPT_WORDS_PER_PAGE): number {
   const words = countWords(text);
   return Math.max(1, Math.round(words / wordsPerPage));
 }
@@ -292,6 +295,7 @@ async function generateScriptData(movieIdea: string, movieGenre: string, scriptL
     FEATURE_CONTINUE_TAIL_CHARS: process.env.FEATURE_CONTINUE_TAIL_CHARS || "(unset)",
     SCRIPT_CHUNK_CONCURRENCY: process.env.SCRIPT_CHUNK_CONCURRENCY || "(unset)",
     OPENAI_MAX_COMPLETION_TOKENS_CAP: process.env.OPENAI_MAX_COMPLETION_TOKENS_CAP || "(unset)",
+    SCRIPT_WORDS_PER_PAGE: SCRIPT_WORDS_PER_PAGE,
 
     vercelMaxDuration: String(maxDuration),
     stepScriptTrimChars: STEP_SCRIPT_TRIM_CHARS,
@@ -323,9 +327,9 @@ async function generateScriptData(movieIdea: string, movieGenre: string, scriptL
     console.error(`[${requestId}] Failed to generate characters:`, err);
   }
 
-  // Stats + length check
+  // Stats + length check (now uses calibrated words-per-page)
   const words = countWords(scriptText);
-  const estPages = estimatePagesByWords(scriptText, 220);
+  const estPages = estimatePagesByWords(scriptText);
   const sceneCount = countScenes(scriptText);
   const minPages = minPagesTargetForMinutes(minutes);
   const tooShort = minutes >= 100 && estPages < minPages;
@@ -333,6 +337,7 @@ async function generateScriptData(movieIdea: string, movieGenre: string, scriptL
   console.log(`[${requestId}] Script stats:`, {
     words,
     estPages,
+    wordsPerPage: SCRIPT_WORDS_PER_PAGE,
     minPagesTarget: minPages,
     tooShort,
     targetMinutes: minutes,
@@ -402,6 +407,7 @@ export async function POST(request: NextRequest) {
       FEATURE_CONTINUE_TAIL_CHARS: process.env.FEATURE_CONTINUE_TAIL_CHARS || "(unset)",
       SCRIPT_CHUNK_CONCURRENCY: process.env.SCRIPT_CHUNK_CONCURRENCY || "(unset)",
       OPENAI_MAX_COMPLETION_TOKENS_CAP: process.env.OPENAI_MAX_COMPLETION_TOKENS_CAP || "(unset)",
+      SCRIPT_WORDS_PER_PAGE: SCRIPT_WORDS_PER_PAGE,
 
       modelText: process.env.OPENAI_MODEL_TEXT || "(unset)",
       modelJson: process.env.OPENAI_MODEL_JSON || "(unset)",
@@ -436,7 +442,7 @@ export async function POST(request: NextRequest) {
               code: "SCRIPT_TOO_SHORT_FOR_FEATURE",
               message: `Generated script appears short for ${minutes} min selection (${scriptResult.stats.estimatedPages} pages est; target >= ${scriptResult.stats.minPagesTarget}).`,
               hint:
-                "Fix is in lib/generators.ts: ensure feature continuation/padding is active in prod. Set FEATURE_CONTINUE_PASSES=4, FEATURE_MIN_WORD_RATIO=0.95, FEATURE_CONTINUE_TAIL_CHARS=3500, OPENAI_MAX_COMPLETION_TOKENS_CAP=12000 and redeploy. Also set FEATURE_DEBUG_CHUNKS=1 to verify pad passes run.",
+                "Fix is in lib/generators.ts: ensure feature continuation/padding is active in prod. Set FEATURE_CONTINUE_PASSES=4, FEATURE_MIN_WORD_RATIO=0.95, FEATURE_CONTINUE_TAIL_CHARS=3500, OPENAI_MAX_COMPLETION_TOKENS_CAP=12000, SCRIPT_WORDS_PER_PAGE=110 (or 100-130 for realistic screenplay) and redeploy. Also set FEATURE_DEBUG_CHUNKS=1 to verify pad passes run.",
             }
           : null;
 
@@ -461,6 +467,7 @@ export async function POST(request: NextRequest) {
           modelJson: process.env.OPENAI_MODEL_JSON || "(unset)",
           fallbackText: process.env.OPENAI_FALLBACK_MODEL_TEXT || "(unset)",
           fallbackJson: process.env.OPENAI_FALLBACK_MODEL_JSON || "(unset)",
+          wordsPerPageUsed: SCRIPT_WORDS_PER_PAGE,
         },
       });
     }
@@ -499,7 +506,7 @@ export async function POST(request: NextRequest) {
           characters: scriptResult.characters,
           stats: scriptResult.stats,
           warning,
-          meta: { step, ms: Date.now() - startedAt },
+          meta: { step, ms: Date.now() - startedAt, wordsPerPageUsed: SCRIPT_WORDS_PER_PAGE },
         });
       }
 
@@ -668,6 +675,7 @@ export async function POST(request: NextRequest) {
           modelJson: process.env.OPENAI_MODEL_JSON || "(unset)",
           fallbackText: process.env.OPENAI_FALLBACK_MODEL_TEXT || "(unset)",
           fallbackJson: process.env.OPENAI_FALLBACK_MODEL_JSON || "(unset)",
+          wordsPerPageUsed: SCRIPT_WORDS_PER_PAGE,
         },
       },
       { status: normalized.status || 500 }

@@ -1,6 +1,5 @@
 // C:\Users\vizir\VizirPro\lib\generators.ts
 import OpenAI from "openai";
-
 /**
  * ✅ Build-safe OpenAI init (prevents Vercel build crash when env vars aren't present at build time)
  * - DO NOT instantiate OpenAI at module load.
@@ -11,65 +10,54 @@ import OpenAI from "openai";
  * This file uses `openai.chat.completions.create(...)`.
  * Some accounts/projects have access restrictions per model alias (ex: `gpt-5-chat-latest`).
  * We therefore:
- *  - Try your env model name as-is FIRST
- *  - Then try the corresponding `*-chat-latest` alias (for gpt-5 / gpt-5.2)
- *  - Then fall back to a safe model you likely have (default: gpt-4o-mini)
+ * - Try your env model name as-is FIRST
+ * - Then try the corresponding `*-chat-latest` alias (for gpt-5 / gpt-5.2)
+ * - Then fall back to a safe model you likely have (default: gpt-4o-mini)
  *
  * ✅ IMPORTANT PARAM NOTE (FIXED):
  * Chat Completions normally uses `max_tokens`.
  * Some providers/models reject `max_tokens` and require `max_completion_tokens`.
  * We now:
- *  - Send `max_tokens` by default
- *  - If rejected, retry once with `max_completion_tokens`
- *  - If that is rejected, retry once with `max_tokens`
+ * - Send `max_tokens` by default
+ * - If rejected, retry once with `max_completion_tokens`
+ * - If that is rejected, retry once with `max_tokens`
  *
  * ✅ Temperature sending is OFF by default
  * To enable it:
- *   OPENAI_SEND_TEMPERATURE=1
+ * OPENAI_SEND_TEMPERATURE=1
  */
 let _openai: OpenAI | null = null;
-
 function getOpenAI(): OpenAI {
   if (typeof window !== "undefined") {
     throw new Error("lib/generators.ts must only run on the server (API route).");
   }
-
   if (_openai) return _openai;
-
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error(
       "Missing OPENAI_API_KEY. Add it in Vercel Project Settings → Environment Variables (Production + Preview)."
     );
   }
-
   const baseURL = process.env.OPENAI_BASE_URL?.trim() || undefined;
-
   // ✅ Kill hidden retry spirals on serverless by default (override via env if desired)
   const maxRetries = parseInt(process.env.OPENAI_CLIENT_MAX_RETRIES || "0", 10);
   const timeout = parseInt(process.env.OPENAI_CLIENT_TIMEOUT_MS || "180000", 10); // 3 min client timeout
-
   _openai = new OpenAI({
     apiKey,
     ...(baseURL ? { baseURL } : {}),
     maxRetries: Number.isFinite(maxRetries) ? maxRetries : 0,
     timeout: Number.isFinite(timeout) ? timeout : 180000,
   });
-
   return _openai;
 }
-
 // ✅ Model defaults (set these in Vercel env vars for Production + Preview)
 const MODEL_TEXT_RAW = (process.env.OPENAI_MODEL_TEXT || "gpt-4o-mini").trim(); // screenplay text
 const MODEL_JSON_RAW = (process.env.OPENAI_MODEL_JSON || "gpt-4o-mini").trim(); // structured JSON outputs
-
 // ✅ Fallback models (used only if your chosen model is blocked/unavailable)
 const FALLBACK_MODEL_TEXT = (process.env.OPENAI_FALLBACK_MODEL_TEXT || "gpt-4o-mini").trim();
 const FALLBACK_MODEL_JSON = (process.env.OPENAI_FALLBACK_MODEL_JSON || "gpt-4o-mini").trim();
-
 // ✅ Temperature sending is OFF by default
 const SEND_TEMPERATURE = process.env.OPENAI_SEND_TEMPERATURE === "1";
-
 // ✅ Debug + timeout guards
 const DEBUG_OUTLINE = process.env.DEBUG_OUTLINE === "1";
 const OUTLINE_USE_JSON_SCHEMA = process.env.OUTLINE_USE_JSON_SCHEMA !== "0"; // set to "0" to force json_object for outline calls
@@ -77,31 +65,23 @@ const OUTLINE_TOTAL_BUDGET_MS = parseInt(process.env.OUTLINE_TOTAL_BUDGET_MS || 
 const OUTLINE_CALL_TIMEOUT_MS = parseInt(process.env.OUTLINE_CALL_TIMEOUT_MS || "45000", 10); // 45 seconds per outline call
 const DEFAULT_JSON_CALL_TIMEOUT_MS = parseInt(process.env.DEFAULT_JSON_CALL_TIMEOUT_MS || "60000", 10); // 60 seconds
 const DEFAULT_TEXT_CALL_TIMEOUT_MS = parseInt(process.env.DEFAULT_TEXT_CALL_TIMEOUT_MS || "120000", 10); // 120 seconds
-
 // Optional: cap output tokens to avoid model hard-limit errors (override if you know your model supports more)
 const MAX_COMPLETION_TOKENS_CAP = parseInt(process.env.OPENAI_MAX_COMPLETION_TOKENS_CAP || "12000", 10);
-
 // ✅ Page/words calibration (lets you align “page count” with your exporter)
 // Default is classic rough screenplay math. If your export renders fewer pages, LOWER this number (e.g., 180).
 const SCRIPT_WORDS_PER_PAGE = clampInt(parseInt(process.env.SCRIPT_WORDS_PER_PAGE || "220", 10), 160, 320);
-
 // Feature writing enforcement (more aggressive defaults)
 const FEATURE_CONTINUE_PASSES = clampInt(parseInt(process.env.FEATURE_CONTINUE_PASSES || "4", 10), 0, 10);
 const FEATURE_MIN_WORD_RATIO = clampFloat(parseFloat(process.env.FEATURE_MIN_WORD_RATIO || "0.96"), 0.5, 0.995);
 const FEATURE_CONTINUE_TAIL_CHARS = clampInt(parseInt(process.env.FEATURE_CONTINUE_TAIL_CHARS || "3500", 10), 800, 8000);
 const FEATURE_DEBUG_CHUNKS = process.env.FEATURE_DEBUG_CHUNKS === "1";
-
 // Optional: final “top-off” passes if the stitched script is still under minimum pages
 const FEATURE_FINAL_TOP_OFF_PASSES = clampInt(parseInt(process.env.FEATURE_FINAL_TOP_OFF_PASSES || "5", 10), 0, 10);
-
 // ---------- Helpers for OpenAI calls ----------
-
 type ChatOptions = {
   model?: string;
-
   // NOTE: we only SEND temperature if OPENAI_SEND_TEMPERATURE=1
   temperature?: number;
-
   /**
    * ✅ Token controls:
    * For Chat Completions, `max_tokens` is the standard.
@@ -110,14 +90,12 @@ type ChatOptions = {
    */
   max_tokens?: number;
   max_completion_tokens?: number;
-
   // Supported params (optional)
   top_p?: number;
   presence_penalty?: number;
   frequency_penalty?: number;
   stop?: string | string[];
   seed?: number;
-
   // app-only extras (NEVER forwarded to OpenAI)
   schema_name?: string; // json_schema name
   request_tag?: string; // debug logging tag
@@ -125,7 +103,6 @@ type ChatOptions = {
   debug?: boolean; // verbose logs
   force_json_object?: boolean; // force json_object even if schema enabled
 };
-
 function uniq(arr: string[]) {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -138,28 +115,22 @@ function uniq(arr: string[]) {
   }
   return out;
 }
-
 function toChatAliasIfKnown(model: string) {
   const m = String(model || "").trim();
   if (!m) return "";
-
   // Already a chat alias or explicit latest alias → keep as-is
   if (/chat/i.test(m) || /-latest$/i.test(m)) return m;
-
   // Common base model names → map to chat alias candidate
   if (/^gpt-5\.2$/i.test(m)) return "gpt-5.2-chat-latest";
   if (/^gpt-5$/i.test(m)) return "gpt-5-chat-latest";
-
   // Otherwise: no known alias mapping
   return "";
 }
-
 function modelCandidatesForChat(rawModel: string, fallbackModel: string) {
   const m = String(rawModel || "").trim();
   const alias = toChatAliasIfKnown(m);
   return uniq([m, alias, fallbackModel]);
 }
-
 /**
  * ✅ Robust error info extraction across:
  * - OpenAI SDK (v4/v5) error shapes
@@ -180,9 +151,7 @@ function extractOpenAIErrorInfo(err: any): {
     err?.error?.status ??
     err?.error?.response?.status ??
     0;
-
   const status = Number(statusRaw) || 0;
-
   // Prefer the deepest “OpenAI-style” error fields when present
   const code =
     String(
@@ -193,7 +162,6 @@ function extractOpenAIErrorInfo(err: any): {
         err?.response?.body?.error?.code ??
         ""
     ) || "";
-
   const type =
     String(
       err?.type ??
@@ -203,7 +171,6 @@ function extractOpenAIErrorInfo(err: any): {
         err?.response?.body?.error?.type ??
         ""
     ) || "";
-
   const param =
     String(
       err?.param ??
@@ -213,7 +180,6 @@ function extractOpenAIErrorInfo(err: any): {
         err?.response?.body?.error?.param ??
         ""
     ) || "";
-
   const message =
     String(
       err?.message ??
@@ -225,27 +191,21 @@ function extractOpenAIErrorInfo(err: any): {
         err?.response?.body?.message ??
         ""
     ) || "";
-
   return { status, code, type, param, message };
 }
-
 function isParamUnsupported(err: any, paramName: string) {
   const info = extractOpenAIErrorInfo(err);
   const msg = String(info.message || "").toLowerCase();
   const p = String(info.param || "").toLowerCase();
   const want = String(paramName || "").toLowerCase();
-
   if (p === want) return true;
-
   // common wording
   if (msg.includes("unsupported parameter") && msg.includes(want)) return true;
   if (msg.includes("unknown parameter") && msg.includes(want)) return true;
   if (msg.includes("unexpected parameter") && msg.includes(want)) return true;
   if (msg.includes("invalid parameter") && msg.includes(want)) return true;
-
   return false;
 }
-
 /**
  * ✅ PATCH: replace the old isModelAccessOrNotFound helper
  */
@@ -255,24 +215,18 @@ function isModelAccessOrNotFound(err: any) {
   const code = String(info.code || "").toLowerCase();
   const type = String(info.type || "").toLowerCase();
   const status = Number(info.status || 0);
-
   const name = String(err?.name || "").toLowerCase();
-
   if (status === 403 || status === 404) return true;
   if (name.includes("notfound") || name.includes("permission") || name.includes("forbidden")) return true;
-
   if (code === "model_not_found" || code === "not_found") return true;
   if (type === "not_found_error" || type === "permission_denied" || type === "insufficient_permissions") return true;
-
   if (msg.includes("does not have access to model")) return true;
   if (msg.includes("model_not_found")) return true;
   if (msg.includes("no such model")) return true;
   if (msg.includes("the model") && msg.includes("does not exist")) return true;
   if (msg.includes("not found") && msg.includes("model")) return true;
-
   return false;
 }
-
 /**
  * ✅ PATCH: replace the old isTemperatureUnsupported helper
  */
@@ -281,21 +235,16 @@ function isTemperatureUnsupported(err: any) {
   const msg = String(info.message || "").toLowerCase();
   const param = String(info.param || "").toLowerCase();
   const status = Number(info.status || 0);
-
   const mentionsTemp = param === "temperature" || msg.includes("temperature");
   if (!mentionsTemp) return false;
-
   if (msg.includes("unsupported value") && msg.includes("temperature")) return true;
   if (msg.includes("unsupported") && msg.includes("temperature")) return true;
   if (msg.includes("invalid") && msg.includes("temperature")) return true;
   if (msg.includes("only the default") && msg.includes("temperature")) return true;
   if (msg.includes("default (1)") && msg.includes("temperature")) return true;
-
   if (status === 400 && mentionsTemp && (msg.includes("supported") || msg.includes("allowed"))) return true;
-
   return false;
 }
-
 /**
  * ✅ IMPORTANT FIX:
  * - Default to `max_tokens` for chat.completions
@@ -304,12 +253,10 @@ function isTemperatureUnsupported(err: any) {
  */
 function pickCompletionParams(options: ChatOptions) {
   const out: any = {};
-
   // ✅ Temperature is OFF by default
   if (SEND_TEMPERATURE && typeof options.temperature === "number") {
     out.temperature = options.temperature;
   }
-
   // Token target
   const raw =
     typeof options.max_tokens === "number"
@@ -317,38 +264,30 @@ function pickCompletionParams(options: ChatOptions) {
       : typeof options.max_completion_tokens === "number"
       ? options.max_completion_tokens
       : undefined;
-
   if (typeof raw === "number") {
     const cap = Number.isFinite(MAX_COMPLETION_TOKENS_CAP) ? MAX_COMPLETION_TOKENS_CAP : 12000;
     const v = Math.max(64, Math.min(Math.trunc(raw), cap));
     out.max_tokens = v; // ✅ default for chat.completions
   }
-
   if (typeof options.top_p === "number") out.top_p = options.top_p;
   if (typeof options.presence_penalty === "number") out.presence_penalty = options.presence_penalty;
   if (typeof options.frequency_penalty === "number") out.frequency_penalty = options.frequency_penalty;
   if (typeof options.seed === "number") out.seed = options.seed;
   if (typeof options.stop === "string" || Array.isArray(options.stop)) out.stop = options.stop;
-
   return out;
 }
-
 function nowMs() {
   return Date.now();
 }
-
 function timeLeftMs(deadlineMs: number) {
   return deadlineMs - nowMs();
 }
-
 function extractUsage(completion: any) {
   return completion?.usage ?? (completion as any)?.usage ?? null;
 }
-
 function extractMsgContent(choice: any): string {
   const content = choice?.message?.content ?? "";
   if (typeof content === "string") return content;
-
   if (Array.isArray(content)) {
     return content
       .map((p: any) => {
@@ -361,7 +300,6 @@ function extractMsgContent(choice: any): string {
   }
   return String(content ?? "");
 }
-
 function stripCodeFences(s: string) {
   let t = (s ?? "").trim();
   if (t.startsWith("```json")) t = t.slice(7).trim();
@@ -369,39 +307,30 @@ function stripCodeFences(s: string) {
   if (t.endsWith("```")) t = t.slice(0, -3).trim();
   return t;
 }
-
 function looksTruncatedJson(raw: string) {
   const t = (raw ?? "").trim();
   if (!t) return false;
-
   if (t.startsWith("{") && !t.endsWith("}")) return true;
   if (t.startsWith("[") && !t.endsWith("]")) return true;
-
   const opens = (t.match(/{/g) || []).length;
   const closes = (t.match(/}/g) || []).length;
   if (opens > closes) return true;
-
   const opensA = (t.match(/\[/g) || []).length;
   const closesA = (t.match(/\]/g) || []).length;
   if (opensA > closesA) return true;
-
   if (t.endsWith("\\")) return true;
-
   return false;
 }
-
 /**
  * ✅ safer JSON parse
  */
 function safeParse<T = any>(raw: string, tag = "json"): T | null {
   try {
     const cleaned = stripCodeFences(String(raw ?? ""));
-
     if (looksTruncatedJson(cleaned)) {
       console.error(`safeParse failed [${tag}] likely truncated len=${cleaned.length}`);
       return null;
     }
-
     return JSON.parse(cleaned) as T;
   } catch (e) {
     const str = stripCodeFences(String(raw ?? ""));
@@ -429,7 +358,6 @@ function safeParse<T = any>(raw: string, tag = "json"): T | null {
     return null;
   }
 }
-
 function swapToMaxCompletionTokens(payload: any) {
   if (!payload) return payload;
   const p = { ...payload };
@@ -440,7 +368,6 @@ function swapToMaxCompletionTokens(payload: any) {
   }
   return p;
 }
-
 function swapToMaxTokens(payload: any) {
   if (!payload) return payload;
   const p = { ...payload };
@@ -451,13 +378,12 @@ function swapToMaxTokens(payload: any) {
   }
   return p;
 }
-
 /**
  * ✅ Core wrapper:
  * - tries model candidates (env model → chat alias → fallback)
  * - retries for:
- *   - temperature unsupported
- *   - max_tokens vs max_completion_tokens incompatibilities
+ * - temperature unsupported
+ * - max_tokens vs max_completion_tokens incompatibilities
  */
 async function createChatCompletionWithFallback(
   payload: any,
@@ -467,11 +393,9 @@ async function createChatCompletionWithFallback(
 ) {
   const openai = getOpenAI();
   let lastErr: any = null;
-
   for (const model of candidates) {
     try {
       const basePayload = { ...payload, model };
-
       // 1) Try as-is
       try {
         return await openai.chat.completions.create(basePayload, { timeout });
@@ -487,7 +411,6 @@ async function createChatCompletionWithFallback(
             err1 = err2;
           }
         }
-
         // 3) If token param rejected, swap and retry
         if (isParamUnsupported(err1, "max_tokens") && basePayload.max_tokens !== undefined) {
           const retryPayload = swapToMaxCompletionTokens(basePayload);
@@ -500,33 +423,27 @@ async function createChatCompletionWithFallback(
           const retryPayload = swapToMaxTokens(basePayload);
           return await openai.chat.completions.create(retryPayload, { timeout });
         }
-
         throw err1;
       }
     } catch (err: any) {
       lastErr = err;
-
       if (isModelAccessOrNotFound(err)) {
         if (DEBUG_OUTLINE) {
           console.log(`[${tag}] model failed: ${model} → trying next. msg=${String(err?.message || "")}`);
         }
         continue;
       }
-
       throw err;
     }
   }
-
   throw lastErr || new Error(`[${tag}] all model candidates failed`);
 }
-
 async function callOpenAI(
   prompt: string,
   options: ChatOptions = {}
 ): Promise<{ content: string; finish_reason: string }> {
   const candidates = modelCandidatesForChat(options.model || MODEL_JSON_RAW, FALLBACK_MODEL_JSON);
   const timeout = typeof options.timeout_ms === "number" ? options.timeout_ms : DEFAULT_JSON_CALL_TIMEOUT_MS;
-
   const completion = await createChatCompletionWithFallback(
     {
       messages: [
@@ -543,26 +460,21 @@ async function callOpenAI(
     candidates,
     options.request_tag || "json_object"
   );
-
   const choice = completion.choices[0];
   let content = extractMsgContent(choice) ?? "";
   content = stripCodeFences(content);
-
   const finish = choice.finish_reason || "stop";
-
   return {
     content: content.trim(),
     finish_reason: finish,
   };
 }
-
 async function callOpenAIText(
   prompt: string,
   options: ChatOptions = {}
 ): Promise<{ content: string; finish_reason: string }> {
   const candidates = modelCandidatesForChat(options.model || MODEL_TEXT_RAW, FALLBACK_MODEL_TEXT);
   const timeout = typeof options.timeout_ms === "number" ? options.timeout_ms : DEFAULT_TEXT_CALL_TIMEOUT_MS;
-
   const completion = await createChatCompletionWithFallback(
     {
       messages: [
@@ -570,12 +482,10 @@ async function callOpenAIText(
           role: "system",
           content: `
 You are a professional screenwriter. Output ONLY screenplay text in **Fountain** format.
-
 STRICT READABILITY / PACING RULES (very important):
 - Use SCENE HEADINGS (INT./EXT. LOCATION - DAY/NIGHT) frequently.
 - NEVER write more than ~350–450 words without a new slug line (INT./EXT.).
 - Keep scenes moving: short action paragraphs, purposeful dialogue beats.
-
 FORMAT RULES:
 - Action in present tense.
 - CHARACTER names uppercase; dialogue under names.
@@ -598,15 +508,12 @@ FORMAT RULES:
     candidates,
     options.request_tag || "text"
   );
-
   const choice = completion.choices[0];
-
   return {
     content: (extractMsgContent(choice) ?? "").trim(),
     finish_reason: choice.finish_reason || "stop",
   };
 }
-
 /**
  * ✅ Structured Outputs helper for schema-locked JSON.
  */
@@ -628,22 +535,17 @@ async function callOpenAIJsonSchema<T>(
     },
     { role: "user" as const, content: prompt },
   ];
-
   const schemaName = (options.schema_name as string) || "FilmJSON";
   const tag = (options.request_tag as string) || "jsonschema";
   const debug = Boolean(options.debug) || DEBUG_OUTLINE;
-
   const timeout =
     typeof options.timeout_ms === "number"
       ? options.timeout_ms
       : tag.startsWith("outline")
       ? OUTLINE_CALL_TIMEOUT_MS
       : DEFAULT_JSON_CALL_TIMEOUT_MS;
-
   const wantSchema = OUTLINE_USE_JSON_SCHEMA && options.force_json_object !== true;
-
   const candidates = modelCandidatesForChat(options.model || MODEL_JSON_RAW, FALLBACK_MODEL_JSON);
-
   if (wantSchema) {
     try {
       const completion = await createChatCompletionWithFallback(
@@ -669,14 +571,11 @@ async function callOpenAIJsonSchema<T>(
         candidates,
         tag
       );
-
       const choice = completion.choices[0];
       const finish = choice.finish_reason || "stop";
       let content = stripCodeFences(extractMsgContent(choice) ?? "");
-
       const usage = extractUsage(completion);
       const meta = { content_len: content.length, usage, finish_reason: finish };
-
       if (debug) {
         console.log(
           `[${tag}] used_schema=true finish=${finish} chars=${content.length} usage=${
@@ -684,19 +583,16 @@ async function callOpenAIJsonSchema<T>(
           }`
         );
       }
-
       if (finish === "length" || looksTruncatedJson(content)) {
         if (debug) console.log(`[${tag}] detected truncation (finish=length or incomplete JSON).`);
         return { data: null, content: content.trim(), finish_reason: finish, used_schema: true, meta };
       }
-
       const data = safeParse<T>(content, `${tag}-json_schema`);
       return { data, content: content.trim(), finish_reason: finish, used_schema: true, meta };
     } catch (err) {
       if (debug) console.log(`[${tag}] schema call threw; falling back to json_object.`, err);
     }
   }
-
   const { content, finish_reason } = await callOpenAI(prompt, {
     ...options,
     temperature: typeof options.temperature === "number" ? options.temperature : 0.3,
@@ -705,7 +601,6 @@ async function callOpenAIJsonSchema<T>(
     request_tag: tag,
     model: options.model,
   });
-
   if (finish_reason === "length" || looksTruncatedJson(content)) {
     if (debug) console.log(`[${tag}] fallback detected truncation (finish=length or incomplete JSON).`);
     return {
@@ -716,19 +611,14 @@ async function callOpenAIJsonSchema<T>(
       meta: { content_len: content.length, usage: null, finish_reason },
     };
   }
-
   const data = safeParse<T>(content, `${tag}-json_object-fallback`);
   const meta = { content_len: content.length, usage: null, finish_reason };
-
   if (debug) {
     console.log(`[${tag}] used_schema=false finish=${finish_reason} chars=${content.length} usage=n/a`);
   }
-
   return { data, content: content.trim(), finish_reason, used_schema: false, meta };
 }
-
 // ---------- Types ----------
-
 export interface Character {
   name: string;
   description: string;
@@ -741,7 +631,6 @@ export interface Character {
   visualDescription?: string;
   imageUrl?: string;
 }
-
 export interface StoryboardFrame {
   scene: string;
   shotNumber: string;
@@ -758,7 +647,6 @@ export interface StoryboardFrame {
   imageUrl?: string;
   coverageShots?: StoryboardFrame[];
 }
-
 export interface ShortScriptItem {
   act?: number;
   sceneNumber?: number;
@@ -768,28 +656,22 @@ export interface ShortScriptItem {
   description?: string;
   dialogue?: string;
 }
-
 // ---------- Utility ----------
-
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
-
 function clampInt(n: number, min: number, max: number) {
   const v = Number.isFinite(n) ? Math.trunc(n) : min;
   return clamp(v, min, max);
 }
-
 function clampFloat(n: number, min: number, max: number) {
   const v = Number.isFinite(n) ? n : min;
   return clamp(v, min, max);
 }
-
 function tail(text: string, maxChars = 4000) {
   if (!text) return "";
   return text.length > maxChars ? text.slice(-maxChars) : text;
 }
-
 function countWords(text: string) {
   const t = String(text || "")
     .replace(/\r\n/g, "\n")
@@ -798,12 +680,10 @@ function countWords(text: string) {
   if (!t) return 0;
   return t.split(/\s+/).filter(Boolean).length;
 }
-
 function estimatePagesFromWords(words: number, wordsPerPage = SCRIPT_WORDS_PER_PAGE) {
   if (!wordsPerPage || wordsPerPage <= 0) return 0;
   return Math.max(1, Math.round(words / wordsPerPage));
 }
-
 function stripChunkMarkers(text: string) {
   return String(text || "")
     .replace(/\r\n/g, "\n")
@@ -811,11 +691,9 @@ function stripChunkMarkers(text: string) {
     .replace(/^\s*\[\[CHUNK_CONTINUE\]\]\s*$/gim, "")
     .trim();
 }
-
 function normalizeNewlines(text: string) {
   return String(text || "").replace(/\r\n/g, "\n");
 }
-
 function lastNonEmptyLine(text: string) {
   const lines = normalizeNewlines(text).split("\n").map((l) => l.trimEnd());
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -824,7 +702,6 @@ function lastNonEmptyLine(text: string) {
   }
   return "";
 }
-
 function extractLastSlugline(text: string) {
   const lines = normalizeNewlines(text).split("\n");
   const re = /^\s*(INT\.|EXT\.|INT\/EXT\.|EXT\/INT\.|I\/E\.)\s+/i;
@@ -834,13 +711,11 @@ function extractLastSlugline(text: string) {
   }
   return "";
 }
-
 function stripTheEndLines(text: string) {
   return String(text || "")
     .replace(/^\s*THE END\.?\s*$/gim, "")
     .trim();
 }
-
 /**
  * Removes repeated overlap when continuation starts by reprinting the tail.
  */
@@ -848,74 +723,57 @@ function removeOverlap(prev: string, next: string, maxScan = 1600) {
   const a = normalizeNewlines(prev);
   const b = normalizeNewlines(next);
   if (!a || !b) return b;
-
   const aTail = a.slice(Math.max(0, a.length - maxScan));
   const maxK = Math.min(aTail.length, b.length);
-
   for (let k = maxK; k >= 80; k--) {
     const suffix = aTail.slice(aTail.length - k);
     if (b.startsWith(suffix)) {
       return b.slice(k).trimStart();
     }
   }
-
   const lastLine = lastNonEmptyLine(a);
   if (lastLine && b.startsWith(lastLine)) {
     return b.slice(lastLine.length).trimStart();
   }
-
   return b;
 }
-
 function parseLengthToMinutes(raw: string): number {
   if (!raw) return 5;
   const s = String(raw).trim().toLowerCase();
-
   if (s.includes("feature")) return 120;
   if (s.includes("short")) return 10;
-
   const colon = s.match(/\b(\d{1,2})\s*:\s*(\d{1,2})\b/);
   if (colon) {
     const hh = parseInt(colon[1], 10);
     const mm = parseInt(colon[2], 10);
     if (!isNaN(hh) && !isNaN(mm)) return Math.max(1, hh * 60 + mm);
   }
-
   const hourMatch = s.match(/(\d+(?:\.\d+)?)\s*(h|hr|hour|hours)\b/);
   const minMatch = s.match(/(\d{1,3})\s*(m|min|mins|minute|minutes)\b/);
-
   const hours = hourMatch ? parseFloat(hourMatch[1]) : 0;
   const mins = minMatch ? parseInt(minMatch[1], 10) : 0;
-
   if (hours && !isNaN(hours)) {
     const total = Math.round(hours * 60) + (isNaN(mins) ? 0 : mins);
     return Math.max(1, total);
   }
-
   if (minMatch && !isNaN(mins)) return Math.max(1, mins);
-
   const numMatch = s.match(/(\d{1,3})/);
   if (numMatch) {
     const m = parseInt(numMatch[1], 10);
     if (!isNaN(m)) return Math.max(1, m);
   }
-
   return 5;
 }
-
 /**
  * ✅ Safer: only removes duplicate FADE IN lines (line-anchored)
  */
 function stripExtraFadeIn(text: string) {
   const raw = (text || "").replace(/\r\n/g, "\n").trim();
   if (!raw) return "";
-
   const lines = raw.split("\n");
   const fadeLine = /^\s*FADE IN:?\s*$/i;
-
   let firstFound = false;
   const out: string[] = [];
-
   for (const line of lines) {
     if (fadeLine.test(line)) {
       if (!firstFound) {
@@ -926,13 +784,10 @@ function stripExtraFadeIn(text: string) {
     }
     out.push(line);
   }
-
   return out.join("\n").trim();
 }
-
 // Helper: simple delay
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 /**
  * ✅ Concurrency-limited mapper (prevents rate spikes; keeps outputs in order)
  */
@@ -944,7 +799,6 @@ async function mapWithConcurrency<T, R>(
   const results = new Array(items.length) as R[];
   const concurrency = Math.max(1, Math.min(limit, items.length));
   let next = 0;
-
   const workers = Array.from({ length: concurrency }, () =>
     (async () => {
       while (true) {
@@ -954,13 +808,10 @@ async function mapWithConcurrency<T, R>(
       }
     })()
   );
-
   await Promise.all(workers);
   return results;
 }
-
 // ---------- Schemas for all generators (PRO reliability) ----------
-
 function buildShortMetaSchema() {
   return {
     type: "object",
@@ -986,7 +837,6 @@ function buildShortMetaSchema() {
     },
   };
 }
-
 function buildCharactersSchema() {
   return {
     type: "object",
@@ -1029,7 +879,6 @@ function buildCharactersSchema() {
     },
   };
 }
-
 function buildStoryboardSchema() {
   const shotSchema = {
     type: "object",
@@ -1076,7 +925,6 @@ function buildStoryboardSchema() {
       },
     },
   };
-
   return {
     type: "object",
     additionalProperties: false,
@@ -1091,7 +939,6 @@ function buildStoryboardSchema() {
     },
   };
 }
-
 function buildConceptSchema() {
   return {
     type: "object",
@@ -1135,7 +982,6 @@ function buildConceptSchema() {
     },
   };
 }
-
 function buildBudgetSchema() {
   return {
     type: "object",
@@ -1176,7 +1022,6 @@ function buildBudgetSchema() {
     },
   };
 }
-
 function buildScheduleSchema() {
   return {
     type: "object",
@@ -1203,7 +1048,6 @@ function buildScheduleSchema() {
     },
   };
 }
-
 function buildLocationsSchema() {
   return {
     type: "object",
@@ -1246,7 +1090,6 @@ function buildLocationsSchema() {
     },
   };
 }
-
 function buildSoundAssetsSchema() {
   return {
     type: "object",
@@ -1274,28 +1117,22 @@ function buildSoundAssetsSchema() {
     },
   };
 }
-
 // ---------- Robust Outline helper ----------
-
 type OutlineResult = {
   logline: string;
   synopsis: string;
   themes: string[];
   shortScript: ShortScriptItem[];
 };
-
 function computeSceneCap(targetPages: number, approxScenes: number) {
   let cap = approxScenes;
-
   if (targetPages >= 110) cap = Math.min(approxScenes, 65);
   else if (targetPages >= 90) cap = Math.min(approxScenes, 60);
   else if (targetPages >= 60) cap = Math.min(approxScenes, 55);
   else if (targetPages >= 30) cap = Math.min(approxScenes, 50);
   else cap = Math.min(approxScenes, 40);
-
   return Math.max(12, cap);
 }
-
 function buildOutlineSchema(sceneCap: number) {
   return {
     type: "object",
@@ -1329,7 +1166,6 @@ function buildOutlineSchema(sceneCap: number) {
     },
   };
 }
-
 function buildActsSchema() {
   return {
     type: "object",
@@ -1361,7 +1197,6 @@ function buildActsSchema() {
     },
   };
 }
-
 function buildScenesOnlySchema(sceneCap: number) {
   return {
     type: "object",
@@ -1387,11 +1222,9 @@ function buildScenesOnlySchema(sceneCap: number) {
     },
   };
 }
-
 function buildActScenesSchema(sceneCount: number) {
   return buildScenesOnlySchema(sceneCount);
 }
-
 function makePlaceholderScenes(count: number, act: 1 | 2 | 3) {
   return Array.from({ length: count }, (_, i) => ({
     act,
@@ -1400,7 +1233,6 @@ function makePlaceholderScenes(count: number, act: 1 | 2 | 3) {
     summary: `Act ${act} beat placeholder. Expand during writing; escalate conflict and maintain continuity.`,
   })) as ShortScriptItem[];
 }
-
 async function repairOutlineJson(params: {
   raw: string;
   sceneCap: number;
@@ -1411,25 +1243,20 @@ async function repairOutlineJson(params: {
   targetPages: number;
 }) {
   const { raw, sceneCap, synopsisLength, summaryRule, idea, genre, targetPages } = params;
-
   const prompt = `
 You will be given malformed or non-conforming JSON. Repair it into a SINGLE valid JSON object that matches the schema exactly.
-
 Constraints:
 - Keep the same story content as much as possible.
 - Ensure shortScript has exactly ${sceneCap} items.
 - ${summaryRule}
 - Fix escaping, quotes, commas, and remove any extra keys.
-
 Idea: ${idea}
 Genre: ${genre}
 Target pages: ${targetPages}
 Synopsis target: ${synopsisLength}
-
 BROKEN_JSON:
 ${raw}
 `.trim();
-
   const schema = buildOutlineSchema(sceneCap);
   const repaired = await callOpenAIJsonSchema<OutlineResult>(prompt, schema, {
     temperature: 0.2,
@@ -1438,10 +1265,8 @@ ${raw}
     schema_name: "OutlineRepair",
     timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
   });
-
   return repaired.data;
 }
-
 /**
  * ✅ Act-splitting scenes (3 small calls) to prevent huge JSON truncation.
  */
@@ -1467,15 +1292,11 @@ async function getActSplitOutline(params: {
     summaryWordSpec,
     deadlineMs,
   } = params;
-
   if (timeLeftMs(deadlineMs) < 25_000) return null;
-
   const actSummaryWords = targetPages >= 60 ? "110–150 words" : "140–190 words";
-
   const actPrompt = `
 Create act-level summaries for a ${genre} film from this idea:
 ${idea}
-
 Constraints:
 - 3 acts only.
 - Act summaries should be ${actSummaryWords}.
@@ -1483,7 +1304,6 @@ Constraints:
 - Synopsis target length: ${synopsisLength}.
 Return JSON with {logline, synopsis, themes, acts:[{act, summary}]}.
 `.trim();
-
   const actsRes = await callOpenAIJsonSchema<{
     logline: string;
     synopsis: string;
@@ -1497,39 +1317,30 @@ Return JSON with {logline, synopsis, themes, acts:[{act, summary}]}.
     timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
     debug: true,
   });
-
   const actsParsed = actsRes.data;
   if (!actsParsed?.acts?.length || actsParsed.acts.length !== 3) return null;
-
   const act1 = clamp(Math.round(sceneCap * 0.25), 10, Math.max(10, sceneCap - 22));
   const act2 = clamp(Math.round(sceneCap * 0.5), 14, Math.max(14, sceneCap - act1 - 8));
   const act3 = Math.max(8, sceneCap - act1 - act2);
-
   const counts: Array<{ act: 1 | 2 | 3; count: number; summary: string }> = [
     { act: 1, count: act1, summary: actsParsed.acts.find((a) => a.act === 1)?.summary || "" },
     { act: 2, count: act2, summary: actsParsed.acts.find((a) => a.act === 2)?.summary || "" },
     { act: 3, count: act3, summary: actsParsed.acts.find((a) => a.act === 3)?.summary || "" },
   ];
-
   const all: ShortScriptItem[] = [];
-
   for (const a of counts) {
     if (timeLeftMs(deadlineMs) < 22_000) {
       all.push(...makePlaceholderScenes(a.count, a.act));
       continue;
     }
-
     let actScenes: ShortScriptItem[] | null = null;
-
     for (let attempt = 1; attempt <= 2; attempt++) {
       const compactRule =
         attempt === 1
           ? `${summaryRule} Keep each summary ${summaryWordSpec}.`
           : `EXTREME COMPACT: summaries 10–16 words max, concrete verbs, no clauses.`;
-
       const prompt = `
 Using the act summary below, generate EXACTLY ${a.count} shortScript scene beats for ACT ${a.act}.
-
 Rules:
 - shortScript MUST be exactly ${a.count} items.
 - Each item must have:
@@ -1539,14 +1350,11 @@ Rules:
   - summary: action beat (${longForm ? "compact" : "detailed"})
 - ${compactRule}
 - NO extra keys. NO markdown.
-
 MOVIE IDEA:
 ${idea}
-
 ACT ${a.act} SUMMARY:
 ${a.summary}
 `.trim();
-
       const res = await callOpenAIJsonSchema<{ shortScript: ShortScriptItem[] }>(
         prompt,
         buildActScenesSchema(a.count),
@@ -1559,7 +1367,6 @@ ${a.summary}
           debug: true,
         }
       );
-
       if (res.data?.shortScript?.length === a.count) {
         actScenes = res.data.shortScript.map((s, idx) => ({
           ...s,
@@ -1573,16 +1380,13 @@ ${a.summary}
         break;
       }
     }
-
     if (!actScenes) actScenes = makePlaceholderScenes(a.count, a.act);
     all.push(...actScenes);
   }
-
   const merged = all.slice(0, sceneCap);
   while (merged.length < sceneCap) {
     merged.push(...makePlaceholderScenes(Math.min(3, sceneCap - merged.length), 2));
   }
-
   const normalized = merged.map((s, idx) => ({
     ...s,
     sceneNumber: idx + 1,
@@ -1590,7 +1394,6 @@ ${a.summary}
       (s.act as any) ||
       (idx < Math.floor(sceneCap * 0.25) ? 1 : idx < Math.floor(sceneCap * 0.75) ? 2 : 3),
   }));
-
   return {
     logline: actsParsed.logline || "",
     synopsis: actsParsed.synopsis || "",
@@ -1598,7 +1401,6 @@ ${a.summary}
     shortScript: normalized,
   };
 }
-
 async function getRobustOutline(params: {
   idea: string;
   genre: string;
@@ -1607,19 +1409,14 @@ async function getRobustOutline(params: {
   synopsisLength: string;
 }): Promise<OutlineResult> {
   const { idea, genre, targetPages, approxScenes, synopsisLength } = params;
-
   const start = nowMs();
   const deadline = start + OUTLINE_TOTAL_BUDGET_MS;
-
   const baseSceneCap = computeSceneCap(targetPages, approxScenes);
-
   const longForm = targetPages >= 60;
   const summaryRule = longForm
     ? "Make scene summaries concrete and compact (12–22 words). Include clear conflict/goal/turn."
     : "Make scene summaries detailed (25–45 words) to guide the writer.";
-
   const summaryWordSpec = longForm ? "12–22 words" : "25–45 words";
-
   if (timeLeftMs(deadline) < 25_000) {
     const fallbackLen = Math.max(12, Math.min(40, baseSceneCap));
     return {
@@ -1634,10 +1431,8 @@ async function getRobustOutline(params: {
       })),
     };
   }
-
   if (targetPages >= 45) {
     const sceneCap = baseSceneCap;
-
     const split = await getActSplitOutline({
       idea,
       genre,
@@ -1649,19 +1444,14 @@ async function getRobustOutline(params: {
       summaryWordSpec,
       deadlineMs: deadline,
     });
-
     if (split?.shortScript?.length === sceneCap) return split;
   }
-
   for (let attempt = 1; attempt <= 2; attempt++) {
     if (timeLeftMs(deadline) < 25_000) break;
-
     const sceneCap = Math.max(12, baseSceneCap - (attempt - 1) * 10);
-
     const prompt = `
 Generate a detailed film outline for a ${genre} film based on this idea:
 ${idea}
-
 Rules:
 - 1 page ≈ 1 minute; target length ≈ ${targetPages} pages
 - shortScript MUST be an array of exactly ${sceneCap} scenes.
@@ -1672,10 +1462,8 @@ Rules:
   - summary: action beat (${summaryWordSpec})
 - ${summaryRule}
 - Themes: 3–5 items.
-
 Synopsis length target: ${synopsisLength}
 `.trim();
-
     const schema = buildOutlineSchema(sceneCap);
     const res = await callOpenAIJsonSchema<OutlineResult>(prompt, schema, {
       temperature: 0.33,
@@ -1685,9 +1473,7 @@ Synopsis length target: ${synopsisLength}
       timeout_ms: OUTLINE_CALL_TIMEOUT_MS,
       debug: true,
     });
-
     const parsed = res.data;
-
     if (
       parsed?.logline &&
       parsed?.synopsis &&
@@ -1701,7 +1487,6 @@ Synopsis length target: ${synopsisLength}
       }));
       return parsed;
     }
-
     if (!parsed && res.content && res.content.length > 50 && timeLeftMs(deadline) > 20_000) {
       const repaired = await repairOutlineJson({
         raw: res.content,
@@ -1718,7 +1503,6 @@ Synopsis length target: ${synopsisLength}
       }
     }
   }
-
   const fallbackLen = Math.max(12, Math.min(40, baseSceneCap));
   return {
     logline: "",
@@ -1732,9 +1516,7 @@ Synopsis length target: ${synopsisLength}
     })),
   };
 }
-
 // ---------- Parallel chunk "bible" for continuity ----------
-
 type ChunkPlan = {
   part: number;
   startScene: number;
@@ -1744,7 +1526,6 @@ type ChunkPlan = {
   mustInclude: string[];
   mustAvoid: string[];
 };
-
 function buildChunkPlanSchema(partCount: number) {
   return {
     type: "object",
@@ -1773,7 +1554,6 @@ function buildChunkPlanSchema(partCount: number) {
     },
   };
 }
-
 async function getChunkPlans(params: {
   idea: string;
   genre: string;
@@ -1782,26 +1562,21 @@ async function getChunkPlans(params: {
   chunks: { part: number; startScene: number; endScene: number; beats: string }[];
 }): Promise<ChunkPlan[] | null> {
   const { idea, genre, targetPages, outline, chunks } = params;
-
   const prompt = `
 Create a continuity "chunk bible" for parallel screenplay writing.
-
 Movie:
 - Genre: ${genre}
 - Target pages: ${targetPages}
 - Idea: ${idea}
-
 Story Context:
 - Logline: ${outline.logline}
 - Synopsis: ${outline.synopsis}
 - Themes: ${(outline.themes || []).slice(0, 6).join(", ")}
-
 For EACH chunk, define:
 - startState: 2–4 sentences describing the exact situation at the START of the chunk
 - endState: 2–4 sentences describing the exact situation at the END of the chunk
 - mustInclude: 3–8 concrete story requirements that MUST happen in this chunk
 - mustAvoid: repetition, contradictions, resets, re-introducing characters as if new, etc.
-
 Chunks:
 ${chunks
   .map(
@@ -1813,7 +1588,6 @@ ${c.beats}
   )
   .join("\n\n")}
 `.trim();
-
   const res = await callOpenAIJsonSchema<{ chunks: ChunkPlan[] }>(prompt, buildChunkPlanSchema(chunks.length), {
     temperature: 0.2,
     max_tokens: 1800,
@@ -1822,26 +1596,20 @@ ${c.beats}
     timeout_ms: DEFAULT_JSON_CALL_TIMEOUT_MS,
     model: MODEL_JSON_RAW,
   });
-
   if (res.data?.chunks?.length === chunks.length) return res.data.chunks;
   return null;
 }
-
 // ---------- GENERATORS ----------
-
 export const generateScript = async (idea: string, genre: string, length: string) => {
   const duration = parseLengthToMinutes(length);
   const targetPages = duration;
-
   const approxScenes = Math.round(duration);
   const minScenes = Math.max(3, Math.floor(approxScenes * 0.9));
   const maxScenes = Math.ceil(approxScenes * 1.1);
-
   let structureGuide = "";
   let numActs = 1;
   let numCharacters = 3;
   let synopsisLength = "150 words";
-
   if (duration <= 1) {
     structureGuide = "A micro-short with 1-2 scenes, visual storytelling, punchy ending.";
     numCharacters = 1;
@@ -1868,11 +1636,9 @@ export const generateScript = async (idea: string, genre: string, length: string
     numCharacters = 7;
     synopsisLength = "600 words";
   }
-
   const basePrompt = `
 Generate a professional screenplay for a ${genre} film based on this idea:
 ${idea}
-
 Specifications:
 - Title: Create a catchy title
 - Length: Aim for ${targetPages} pages total (1 page ≈ 1 minute, ~${SCRIPT_WORDS_PER_PAGE} words per page)
@@ -1884,7 +1650,6 @@ Specifications:
 - Themes: 3-5 key themes
 - Style: Highly cinematic, detailed action, and natural dialogue with subtext. Do not summarize.
 `.trim();
-
   // --- PATH A: Short scripts (<= 15 min) ---
   if (duration <= 15) {
     const metaPrompt = `${basePrompt}
@@ -1895,11 +1660,9 @@ Return JSON:
   "themes": ["..."],
   "shortScript": [{"scene":"...","description":"...","dialogue":"..."}]
 }
-
 Constraints:
 - synopsis should be about ${synopsisLength}.
 `.trim();
-
     const metaRes = await callOpenAIJsonSchema<{
       logline: string;
       synopsis: string;
@@ -1912,7 +1675,6 @@ Constraints:
       schema_name: "ShortMeta",
       model: MODEL_JSON_RAW,
     });
-
     const meta =
       metaRes.data ||
       safeParse(metaRes.content, "short-meta-fallback") || {
@@ -1921,27 +1683,22 @@ Constraints:
         themes: [],
         shortScript: [],
       };
-
     const writePrompt = `
 Write a screenplay in Fountain format of ~${targetPages} pages (1 page ≈ ~${SCRIPT_WORDS_PER_PAGE} words).
 Start with FADE IN: and include the opening scene heading.
 Output screenplay text ONLY. No JSON. No commentary.
-
 Enforcement:
 - Use slug lines frequently (INT./EXT.)
 - Never go ~350–450 words without a new slug line
-
 === META ===
 ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, themes: meta.themes }, null, 2)}
 `.trim();
-
     const { content: scriptText } = await callOpenAIText(writePrompt, {
       temperature: 1,
       max_tokens: 6000,
       model: MODEL_TEXT_RAW,
       request_tag: "short-script",
     });
-
     return {
       logline: meta.logline,
       synopsis: meta.synopsis,
@@ -1950,7 +1707,6 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
       themes: meta.themes || [],
     };
   }
-
   // --- PATH B: Feature scripts ---
   const outlineParsed = await getRobustOutline({
     idea,
@@ -1959,40 +1715,31 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     approxScenes,
     synopsisLength,
   });
-
   const shortScript: ShortScriptItem[] = outlineParsed.shortScript || [];
   const effectiveScenes = Math.max(1, shortScript.length || approxScenes);
-
   const chunkCount =
     targetPages <= 45 ? 4 :
     targetPages <= 70 ? 6 :
     targetPages <= 95 ? 8 :
     targetPages <= 120 ? 9 :
     10;
-
   const safeChunkCount = Math.min(chunkCount, effectiveScenes);
   const pagesPerChunk = Math.ceil(targetPages / safeChunkCount);
-
   // Calibrated words-per-page math
   const MIN_WPP = Math.max(160, Math.round(SCRIPT_WORDS_PER_PAGE * 1.0));
   const AIM_WPP = Math.max(MIN_WPP, Math.round(SCRIPT_WORDS_PER_PAGE * 1.15));
   const MAX_WPP = Math.max(AIM_WPP + 20, Math.round(SCRIPT_WORDS_PER_PAGE * 1.35));
-
   const minWords = Math.max(1400, Math.round(pagesPerChunk * MIN_WPP));
   const aimWords = Math.max(minWords, Math.round(pagesPerChunk * AIM_WPP));
   const maxWords = Math.max(aimWords + 250, Math.round(pagesPerChunk * MAX_WPP));
-
   // Token budget (words→tokens approx)
   const maxTokensPerChunk = clamp(Math.round(maxWords * 1.9), 5000, 12000);
-
   const chunkRanges = Array.from({ length: safeChunkCount }, (_, idx) => {
     const startScene = Math.floor(idx * (effectiveScenes / safeChunkCount)) + 1;
     const endScene = Math.min(Math.floor((idx + 1) * (effectiveScenes / safeChunkCount)), effectiveScenes);
     return { part: idx + 1, startScene, endScene };
   }).filter((r) => r.endScene >= r.startScene);
-
   const beatsMax = targetPages >= 60 ? 28 : 32;
-
   const chunkInputs = chunkRanges.map((r) => {
     const chunkScenes = shortScript.slice(r.startScene - 1, r.endScene);
     const beats = chunkScenes
@@ -2001,7 +1748,6 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
       .join("\n");
     return { ...r, beats: beats || "(No beats available for this chunk.)" };
   });
-
   const plans = await getChunkPlans({
     idea,
     genre,
@@ -2009,68 +1755,54 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     outline: outlineParsed,
     chunks: chunkInputs,
   });
-
   type ChunkGenResult =
     | { ok: true; content: string }
     | { ok: false; content: string; error: unknown };
-
   const envConc = parseInt(process.env.SCRIPT_CHUNK_CONCURRENCY || "2", 10);
   const chunkConcurrency = clamp(Number.isFinite(envConc) ? envConc : 2, 1, 6);
-
   function logChunk(tag: string, data: any) {
     if (FEATURE_DEBUG_CHUNKS) console.log(`[feature-chunk] ${tag}`, data);
   }
-
   async function generateOneChunk(
     chunk: { part: number; startScene: number; endScene: number; beats: string },
     index: number,
     attempt: number
   ): Promise<ChunkGenResult> {
     await delay((index % chunkConcurrency) * 300);
-
     const isStart = index === 0;
     const isFinal = index === chunkInputs.length - 1;
     const plan = plans?.[index];
-
     const strictFeature = targetPages >= 90; // ✅ enforce real length for features
-
     const chunkPrompt = `
 Write a continuous portion of a feature screenplay in **Fountain** format.
-
 GLOBAL CONTEXT:
 Genre: ${genre}
 Logline: ${outlineParsed.logline}
 Synopsis: ${outlineParsed.synopsis}
 Themes: ${(outlineParsed.themes || []).slice(0, 6).join(", ")}
-
 SCOPE:
 - This portion covers scenes #${chunk.startScene} through #${chunk.endScene}.
 - LENGTH REQUIREMENT: Minimum ${minWords} words (target ~${aimWords}, max ~${maxWords}).
 - IMPORTANT: Do NOT print the [[CHUNK_END]] marker until you have written AT LEAST ${minWords} words.
 - Scenes must feel like real screenplay pages: action beats + dialogue exchanges + blocking.
 - Avoid summarizing. Write the actual screenplay lines.
-
 FORMAT RULES:
 - ${isStart ? 'Include "FADE IN:" exactly once at the very start.' : 'Do NOT include "FADE IN:". Start with the first scene heading.'}
 - Use proper slug lines (INT./EXT.) and write cinematic action + dialogue.
 - No meta labels like "PART ${chunk.part}".
 - ${isFinal ? "You MAY end with a satisfying final beat (but no meta text)." : "DO NOT conclude the overall story. DO NOT write THE END."}
-
 CONTINUATION MARKER (IMPORTANT):
 - At the END of your output, print this exact line on its own line:
 [[CHUNK_END]]
-
 ${plan ? `CONTINUITY CONSTRAINTS:
 START STATE: ${plan.startState}
 END STATE: ${plan.endState}
 MUST INCLUDE: ${(plan.mustInclude || []).join(", ")}
 MUST AVOID: ${(plan.mustAvoid || []).join(", ")}
 ` : ""}
-
 BEATS TO EXPAND:
 ${chunk.beats}
 `.trim();
-
     try {
       const first = await callOpenAIText(chunkPrompt, {
         temperature: 1,
@@ -2079,21 +1811,16 @@ ${chunk.beats}
         model: MODEL_TEXT_RAW,
         request_tag: `feature-chunk-${chunk.part}-a${attempt}`,
       });
-
       let combined = normalizeNewlines(first.content || "").trim();
       if (!combined) throw new Error("Empty chunk content");
-
       if (!/^\s*\[\[CHUNK_END\]\]\s*$/im.test(combined)) {
         combined = `${combined}\n\n[[CHUNK_END]]\n`;
       }
-
       // ✅ enforce strict minimum for features
       const minTarget = strictFeature ? minWords : Math.round(minWords * FEATURE_MIN_WORD_RATIO);
       const extraPasses = strictFeature ? 2 : 0;
       const passLimit = FEATURE_CONTINUE_PASSES + extraPasses;
-
       let words = countWords(stripChunkMarkers(combined));
-
       logChunk(`part-${chunk.part}-initial`, {
         words,
         minTarget,
@@ -2103,21 +1830,16 @@ ${chunk.beats}
         startScene: chunk.startScene,
         endScene: chunk.endScene,
       });
-
       for (let pass = 1; pass <= passLimit; pass++) {
         if (words >= minTarget) break;
-
         const prevClean = stripChunkMarkers(combined);
         const tailText = tail(prevClean, FEATURE_CONTINUE_TAIL_CHARS);
         const lastLine = lastNonEmptyLine(prevClean);
         const lastSlug = extractLastSlugline(prevClean);
-
         const needMore = Math.max(0, minTarget - words);
         const addWordsTarget = clampInt(Math.round(Math.max(700, needMore * 1.15)), 700, Math.round(aimWords * 1.1));
-
         const continuePrompt = `
 Continue the SAME screenplay portion in **Fountain** format.
-
 CRITICAL RULES (no repetition):
 - Continue immediately AFTER where the previous text ends.
 - Do NOT repeat ANY text already written.
@@ -2125,30 +1847,23 @@ CRITICAL RULES (no repetition):
 - Do NOT recap. Do NOT re-introduce characters as if new.
 - If you're still in the same scene, continue that scene.
 - If that scene naturally ends, move to the next scene (still within scenes #${chunk.startScene}–#${chunk.endScene}).
-
 LENGTH (STRICT):
 - Add at least ~${addWordsTarget} NEW words of screenplay text (dialogue + action).
 - Do NOT print [[CHUNK_END]] until you have added ~${addWordsTarget} new words.
-
 DO NOT:
 - Do not output "FADE IN:".
 - ${isFinal ? "Avoid meta text. No headings like PART." : "Do NOT conclude the overall story. Do NOT write THE END."}
-
 Anchor (last slugline if any): ${lastSlug || "(none found)"}
 Exact last line (do NOT repeat it): ${lastLine || "(none)"}
-
 LAST_OUTPUT_TAIL (for continuity; do NOT copy it):
 <<<
 ${tailText}
 >>>
-
 Beats reminder (do NOT repeat scenes already covered; continue forward):
 ${chunk.beats}
-
 At the END of your continuation, print:
 [[CHUNK_END]]
 `.trim();
-
         const cont = await callOpenAIText(continuePrompt, {
           temperature: 1,
           max_tokens: maxTokensPerChunk,
@@ -2156,22 +1871,16 @@ At the END of your continuation, print:
           model: MODEL_TEXT_RAW,
           request_tag: `feature-chunk-${chunk.part}-continue-${pass}`,
         });
-
         let contText = normalizeNewlines(cont.content || "").trim();
         if (!contText) break;
-
         if (!/^\s*\[\[CHUNK_END\]\]\s*$/im.test(contText)) {
           contText = `${contText}\n\n[[CHUNK_END]]\n`;
         }
-
         const prevNoMarker = stripChunkMarkers(combined);
         const contNoMarker = stripChunkMarkers(contText);
         const cleanedContNoMarker = removeOverlap(prevNoMarker, contNoMarker, 2600);
-
         combined = `${prevNoMarker.trim()}\n\n${cleanedContNoMarker.trim()}\n\n[[CHUNK_END]]\n`;
-
         words = countWords(stripChunkMarkers(combined));
-
         logChunk(`part-${chunk.part}-continue-${pass}`, {
           words,
           minTarget,
@@ -2179,10 +1888,8 @@ At the END of your continuation, print:
           lastSlug: lastSlug || null,
         });
       }
-
       combined = combined.trim();
       if (!combined) throw new Error("Chunk became empty after processing");
-
       // If still short on strict features, log it (even without FEATURE_DEBUG_CHUNKS)
       if (targetPages >= 90) {
         const w = countWords(stripChunkMarkers(combined));
@@ -2196,25 +1903,20 @@ At the END of your continuation, print:
           });
         }
       }
-
       return { ok: true, content: combined };
     } catch (error) {
       return { ok: false, content: "", error };
     }
   }
-
   const firstPass = await mapWithConcurrency(chunkInputs, chunkConcurrency, async (chunk, index) => {
     return generateOneChunk(chunk, index, 1);
   });
-
   const failedIdx = firstPass
     .map((r, i) => ({ r, i }))
     .filter(({ r }) => !r.ok)
     .map(({ i }) => i);
-
   if (failedIdx.length > 0) {
     await delay(900);
-
     const retryResults = await mapWithConcurrency(
       failedIdx,
       Math.max(1, Math.min(2, chunkConcurrency)),
@@ -2223,32 +1925,26 @@ At the END of your continuation, print:
         return { idx, res: await generateOneChunk(chunkInputs[idx], idx, 2) };
       }
     );
-
     for (const { idx, res } of retryResults) {
       firstPass[idx] = res;
     }
   }
-
   const stitchedChunks = firstPass.map((r, idx) => {
     if (r.ok) return r.content;
-
     const chunk = chunkInputs[idx];
     const plan = plans?.[idx];
     const note = `
 /*
 NOTE: This section could not be generated due to a transient error.
 Use the beats below to regenerate PART ${chunk.part} (Scenes ${chunk.startScene}–${chunk.endScene}):
-
 ${plan ? `START STATE: ${plan.startState}
 END STATE: ${plan.endState}
 MUST INCLUDE: ${(plan.mustInclude || []).join(", ")}
 MUST AVOID: ${(plan.mustAvoid || []).join(", ")}\n\n` : ""}${chunk.beats}
 */
 `.trim();
-
     return note;
   });
-
   let stitched = "";
   for (const rawChunk of stitchedChunks.filter(Boolean)) {
     const cleaned = stripChunkMarkers(rawChunk);
@@ -2259,10 +1955,8 @@ MUST AVOID: ${(plan.mustAvoid || []).join(", ")}\n\n` : ""}${chunk.beats}
     const addition = removeOverlap(stitched, cleaned, 2600);
     stitched = `${stitched.trimEnd()}\n\n${addition.trimStart()}`.trim();
   }
-
   let scriptFountain = stripExtraFadeIn(stitched);
   scriptFountain = stripTheEndLines(scriptFountain);
-
   // Optional debug: final page estimate
   const w0 = countWords(scriptFountain);
   const p0 = estimatePagesFromWords(w0, SCRIPT_WORDS_PER_PAGE);
@@ -2274,16 +1968,13 @@ MUST AVOID: ${(plan.mustAvoid || []).join(", ")}\n\n` : ""}${chunk.beats}
       wordsPerPage: SCRIPT_WORDS_PER_PAGE,
     });
   }
-
   // ✅ Final “top-off” if still too short
   const minFinalPagesWanted =
     targetPages >= 110 ? 95 :
     targetPages >= 90 ? 80 :
     Math.max(1, Math.round(targetPages * 0.85));
-
   let finalWords = w0;
   let finalPages = p0;
-
   if (finalPages < minFinalPagesWanted) {
     console.log("[feature-script] WARNING short feature before topoff", {
       finalWords,
@@ -2293,44 +1984,34 @@ MUST AVOID: ${(plan.mustAvoid || []).join(", ")}\n\n` : ""}${chunk.beats}
       wordsPerPage: SCRIPT_WORDS_PER_PAGE,
     });
   }
-
   if (finalPages < minFinalPagesWanted && FEATURE_FINAL_TOP_OFF_PASSES > 0) {
     for (let pass = 1; pass <= FEATURE_FINAL_TOP_OFF_PASSES; pass++) {
       finalWords = countWords(scriptFountain);
       finalPages = estimatePagesFromWords(finalWords, SCRIPT_WORDS_PER_PAGE);
       if (finalPages >= minFinalPagesWanted) break;
-
       const needPages = Math.max(1, minFinalPagesWanted - finalPages);
       const needWords = needPages * SCRIPT_WORDS_PER_PAGE;
       const addWordsTarget = clampInt(Math.round(needWords * 1.25), 1500, 9000);
-
       const prevClean = scriptFountain.trim();
       const tailText = tail(prevClean, FEATURE_CONTINUE_TAIL_CHARS);
       const lastLine = lastNonEmptyLine(prevClean);
       const lastSlug = extractLastSlugline(prevClean);
-
       const topOffPrompt = `
 Continue the SAME screenplay in **Fountain** format to increase runtime/page count.
-
 STRICT:
 - Add at least ~${addWordsTarget} NEW words of screenplay text (dialogue + action).
 - Do NOT repeat any existing text.
 - No meta headings, no explanations, no “PART”, no summaries.
 - Do NOT write "THE END".
-
 If the story already feels concluded, extend the denouement/aftermath with 1–3 additional short scenes that feel natural and cinematic.
-
 Anchor (last slugline if any): ${lastSlug || "(none found)"}
 Exact last line (do NOT repeat it): ${lastLine || "(none)"}
-
 LAST_OUTPUT_TAIL (for continuity; do NOT copy it):
 <<<
 ${tailText}
 >>>
 `.trim();
-
       const maxTokensTopOff = clamp(Math.round(addWordsTarget * 2.0), 4000, 12000);
-
       const cont = await callOpenAIText(topOffPrompt, {
         temperature: 1,
         max_tokens: maxTokensTopOff,
@@ -2338,16 +2019,12 @@ ${tailText}
         model: MODEL_TEXT_RAW,
         request_tag: `feature-topoff-${pass}`,
       });
-
       let contText = normalizeNewlines(cont.content || "").trim();
       if (!contText) break;
-
       const cleanedAdd = removeOverlap(scriptFountain, contText, 3000);
       scriptFountain = stripTheEndLines(`${scriptFountain.trimEnd()}\n\n${cleanedAdd.trimStart()}`.trim());
-
       finalWords = countWords(scriptFountain);
       finalPages = estimatePagesFromWords(finalWords, SCRIPT_WORDS_PER_PAGE);
-
       if (FEATURE_DEBUG_CHUNKS) {
         console.log("[feature-topoff] pass", {
           pass,
@@ -2359,7 +2036,6 @@ ${tailText}
       }
     }
   }
-
   return {
     logline: outlineParsed.logline,
     synopsis: outlineParsed.synopsis,
@@ -2368,14 +2044,11 @@ ${tailText}
     themes: outlineParsed.themes,
   };
 };
-
 // ---------- Characters ----------
-
 export const generateCharacters = async (script: string, genre: string) => {
   const prompt = `
 Given this film script:
 ${script}
-
 Generate detailed character profiles for ALL main and supporting characters in this ${genre} film.
 Return JSON: { "characters": [...] } with the exact fields:
 - name
@@ -2389,7 +2062,6 @@ Return JSON: { "characters": [...] } with the exact fields:
 - visualDescription
 - imageUrl (empty string)
 `.trim();
-
   const res = await callOpenAIJsonSchema<{ characters: Character[] }>(prompt, buildCharactersSchema(), {
     temperature: 0.35,
     max_tokens: 2200,
@@ -2397,12 +2069,9 @@ Return JSON: { "characters": [...] } with the exact fields:
     schema_name: "Characters",
     model: MODEL_JSON_RAW,
   });
-
   return { characters: res.data?.characters || [] };
 };
-
 // ---------- Storyboard ----------
-
 export const generateStoryboard = async ({
   movieIdea,
   movieGenre,
@@ -2419,26 +2088,20 @@ export const generateStoryboard = async ({
   const duration = parseLengthToMinutes(scriptLength);
   const numFrames = duration <= 5 ? 8 : duration <= 15 ? 15 : duration <= 30 ? 25 : duration <= 60 ? 40 : 80;
   const coveragePerFrame = duration > 15 ? 3 : 2;
-
   const prompt = `
 Generate a detailed storyboard for this ${movieGenre} film idea: ${movieIdea}
-
 Full Script (trimmed):
 ${tail(script, 18000)}
-
 Characters:
 ${JSON.stringify(characters).slice(0, 12000)}
-
 Specifications:
 - Target about ${numFrames} main frames (we will normalize if needed)
 - Each main frame should include ~${coveragePerFrame} coverage shots
 - For each frame/shot include:
   scene, shotNumber, description, cameraAngle, cameraMovement, lens, lighting, duration, dialogue, soundEffects, notes, imagePrompt, imageUrl (empty)
 - Always fill imagePrompt. Leave imageUrl empty.
-
 Return JSON with key "storyboard" containing array of main frames, each optionally having coverageShots array.
 `.trim();
-
   const res = await callOpenAIJsonSchema<{ storyboard: StoryboardFrame[] }>(prompt, buildStoryboardSchema(), {
     temperature: 0.4,
     max_tokens: 4500,
@@ -2446,10 +2109,8 @@ Return JSON with key "storyboard" containing array of main frames, each optional
     schema_name: "Storyboard",
     model: MODEL_JSON_RAW,
   });
-
   let frames = res.data?.storyboard || [];
   frames = Array.isArray(frames) ? frames : [];
-
   frames = frames.map((f, idx) => ({
     ...f,
     shotNumber: String(f.shotNumber || `${idx + 1}`),
@@ -2464,24 +2125,18 @@ Return JSON with key "storyboard" containing array of main frames, each optional
         }))
       : [],
   }));
-
   return frames;
 };
-
 // ---------- Concept ----------
-
 export const generateConcept = async (script: string, genre: string) => {
   const prompt = `
 Based on this ${genre} film script:
 ${tail(script, 20000)}
-
 Generate a visual concept including:
 - concept object with visualStyle, colorPalette, cameraTechniques, lightingApproach, thematicSymbolism, productionValues
 - visualReferences: array of 3-5 objects with description and imageUrl (reference links if available)
-
 Return JSON.
 `.trim();
-
   const res = await callOpenAIJsonSchema<{ concept: any; visualReferences: any[] }>(prompt, buildConceptSchema(), {
     temperature: 0.5,
     max_tokens: 2200,
@@ -2489,15 +2144,12 @@ Return JSON.
     schema_name: "Concept",
     model: MODEL_JSON_RAW,
   });
-
   return {
     concept: res.data?.concept || {},
     visualReferences: res.data?.visualReferences || [],
   };
 };
-
 // ---------- Budget ----------
-
 export const generateBudget = async (genre: string, length: string) => {
   const duration = parseLengthToMinutes(length);
   const baseBudget =
@@ -2506,14 +2158,11 @@ export const generateBudget = async (genre: string, length: string) => {
     duration <= 30 ? 50000 :
     duration <= 60 ? 100000 :
     duration <= 120 ? 200000 : 500000;
-
   const genreMultiplier = /sci[- ]?fi|action/i.test(genre) ? 1.5 : 1;
   const total = Math.round(baseBudget * genreMultiplier);
-
   const prompt = `
 Generate a detailed film budget breakdown for a ${genre} film of ${length} length.
 Total estimated budget: $${total}
-
 Return JSON:
 {
   "categories": [
@@ -2527,13 +2176,11 @@ Return JSON:
     }
   ]
 }
-
 Rules:
 - category amounts must roughly sum to total budget
 - percentages should total ~100
 - be realistic for indie film production
 `.trim();
-
   const res = await callOpenAIJsonSchema<{ categories: any[] }>(prompt, buildBudgetSchema(), {
     temperature: 0.25,
     max_tokens: 2600,
@@ -2541,17 +2188,13 @@ Rules:
     schema_name: "Budget",
     model: MODEL_JSON_RAW,
   });
-
   return res.data || { categories: [] };
 };
-
 // ---------- Schedule ----------
-
 export const generateSchedule = async (script: string, length: string) => {
   const prompt = `
 Given this film script:
 ${tail(script, 20000)}
-
 Generate a shooting schedule for a film of length ${length}.
 Return JSON:
 {
@@ -2566,7 +2209,6 @@ Return JSON:
   ]
 }
 `.trim();
-
   const res = await callOpenAIJsonSchema<{ schedule: any[] }>(prompt, buildScheduleSchema(), {
     temperature: 0.3,
     max_tokens: 2200,
@@ -2574,12 +2216,9 @@ Return JSON:
     schema_name: "Schedule",
     model: MODEL_JSON_RAW,
   });
-
   return { schedule: res.data?.schedule || [] };
 };
-
 // ---------- Locations ----------
-
 export const generateLocations = async (script: string, genre: string) => {
   const fallbackScript = `
 A ${genre || "generic"} film featuring a protagonist navigating several dramatic locations:
@@ -2587,19 +2226,14 @@ A ${genre || "generic"} film featuring a protagonist navigating several dramatic
 - Rainy neon-lit city streets at night.
 - A dramatic rooftop showdown above a glowing skyline.
 `.trim();
-
   const usedScript = script && script.trim().length > 0 ? script : fallbackScript;
-
   const prompt = `
 You are a professional film location scout.
-
 Analyze the following film script and extract ALL distinct filming locations based on scene headings and descriptions.
-
 SCRIPT:
 """START_SCRIPT"""
 ${tail(usedScript, 22000)}
 """END_SCRIPT"""
-
 Return JSON:
 {
   "locations": [
@@ -2617,12 +2251,10 @@ Return JSON:
     }
   ]
 }
-
 Rules:
 - Use only actual location names from scene headings (do not invent generic names).
 - Never leave any field blank.
 `.trim();
-
   const res = await callOpenAIJsonSchema<{ locations: any[] }>(prompt, buildLocationsSchema(), {
     temperature: 0.35,
     max_tokens: 3200,
@@ -2630,24 +2262,17 @@ Rules:
     schema_name: "Locations",
     model: MODEL_JSON_RAW,
   });
-
   return { locations: res.data?.locations || [] };
 };
-
 // ---------- Sound Assets ----------
-
 export const generateSoundAssets = async (script: string, genre: string) => {
   const words = countWords(script);
   const approxMinutes = clampInt(Math.round(words / SCRIPT_WORDS_PER_PAGE), 5, 180);
-
   const numAssets = approxMinutes <= 15 ? 5 : approxMinutes <= 60 ? 8 : 15;
-
   const prompt = `
 Given this film script:
 ${tail(script, 22000)}
-
 Generate exactly ${numAssets} sound assets for a ${genre} film.
-
 Return JSON:
 {
   "soundAssets": [
@@ -2661,12 +2286,10 @@ Return JSON:
     }
   ]
 }
-
 Rules:
 - duration must be at least 00:10
 - audioUrl must be an empty string
 `.trim();
-
   const res = await callOpenAIJsonSchema<{ soundAssets: any[] }>(prompt, buildSoundAssetsSchema(), {
     temperature: 0.35,
     max_tokens: 2600,
@@ -2674,9 +2297,7 @@ Rules:
     schema_name: "SoundAssets",
     model: MODEL_JSON_RAW,
   });
-
   let soundAssets: any[] = res.data?.soundAssets || [];
-
   const minDuration = approxMinutes >= 60 ? "00:30" : "00:10";
   soundAssets = soundAssets.map((asset) => {
     const [mins, secs] = String(asset.duration || "00:10")
@@ -2686,6 +2307,5 @@ Rules:
     const adjustedDuration = totalSecs >= 10 ? asset.duration : minDuration;
     return { ...asset, duration: adjustedDuration, audioUrl: "" };
   });
-
   return { soundAssets };
 };
