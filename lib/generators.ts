@@ -15,14 +15,17 @@ import OpenAI from "openai";
  *  - Then try the corresponding `*-chat-latest` alias (for gpt-5 / gpt-5.2)
  *  - Then fall back to a safe model you likely have (default: gpt-4o-mini)
  *
- * ✅ IMPORTANT PARAM NOTE:
- * Some models reject custom `temperature` values (only default = 1 is supported).
- * To stop `400 Unsupported value: 'temperature'...`, we DO NOT send `temperature`
- * unless you explicitly enable it via env:
+ * ✅ IMPORTANT PARAM NOTE (FIXED):
+ * Chat Completions normally uses `max_tokens`.
+ * Some providers/models reject `max_tokens` and require `max_completion_tokens`.
+ * We now:
+ *  - Send `max_tokens` by default
+ *  - If rejected, retry once with `max_completion_tokens`
+ *  - If that is rejected, retry once with `max_tokens`
  *
+ * ✅ Temperature sending is OFF by default
+ * To enable it:
  *   OPENAI_SEND_TEMPERATURE=1
- *
- * Keep it OFF (default) to be compatible with models that only support default temperature.
  */
 let _openai: OpenAI | null = null;
 
@@ -44,13 +47,13 @@ function getOpenAI(): OpenAI {
 
   // ✅ Kill hidden retry spirals on serverless by default (override via env if desired)
   const maxRetries = parseInt(process.env.OPENAI_CLIENT_MAX_RETRIES || "0", 10);
-  const timeout = parseInt(process.env.OPENAI_CLIENT_TIMEOUT_MS || "120000", 10); // 2 min client timeout
+  const timeout = parseInt(process.env.OPENAI_CLIENT_TIMEOUT_MS || "180000", 10); // 3 min client timeout
 
   _openai = new OpenAI({
     apiKey,
     ...(baseURL ? { baseURL } : {}),
     maxRetries: Number.isFinite(maxRetries) ? maxRetries : 0,
-    timeout: Number.isFinite(timeout) ? timeout : 120000,
+    timeout: Number.isFinite(timeout) ? timeout : 180000,
   });
 
   return _openai;
@@ -73,23 +76,23 @@ const OUTLINE_USE_JSON_SCHEMA = process.env.OUTLINE_USE_JSON_SCHEMA !== "0"; // 
 const OUTLINE_TOTAL_BUDGET_MS = parseInt(process.env.OUTLINE_TOTAL_BUDGET_MS || "120000", 10); // 2 minutes
 const OUTLINE_CALL_TIMEOUT_MS = parseInt(process.env.OUTLINE_CALL_TIMEOUT_MS || "45000", 10); // 45 seconds per outline call
 const DEFAULT_JSON_CALL_TIMEOUT_MS = parseInt(process.env.DEFAULT_JSON_CALL_TIMEOUT_MS || "60000", 10); // 60 seconds
-const DEFAULT_TEXT_CALL_TIMEOUT_MS = parseInt(process.env.DEFAULT_TEXT_CALL_TIMEOUT_MS || "90000", 10); // 90 seconds
+const DEFAULT_TEXT_CALL_TIMEOUT_MS = parseInt(process.env.DEFAULT_TEXT_CALL_TIMEOUT_MS || "120000", 10); // 120 seconds
 
-// Optional: cap completion tokens to avoid model hard-limit errors (override if you know your model supports more)
-const MAX_COMPLETION_TOKENS_CAP = parseInt(process.env.OPENAI_MAX_COMPLETION_TOKENS_CAP || "8192", 10);
+// Optional: cap output tokens to avoid model hard-limit errors (override if you know your model supports more)
+const MAX_COMPLETION_TOKENS_CAP = parseInt(process.env.OPENAI_MAX_COMPLETION_TOKENS_CAP || "12000", 10);
 
 // ✅ Page/words calibration (lets you align “page count” with your exporter)
 // Default is classic rough screenplay math. If your export renders fewer pages, LOWER this number (e.g., 180).
 const SCRIPT_WORDS_PER_PAGE = clampInt(parseInt(process.env.SCRIPT_WORDS_PER_PAGE || "220", 10), 160, 320);
 
-// Feature writing enforcement (new)
-const FEATURE_CONTINUE_PASSES = clampInt(parseInt(process.env.FEATURE_CONTINUE_PASSES || "2", 10), 0, 8);
-const FEATURE_MIN_WORD_RATIO = clampFloat(parseFloat(process.env.FEATURE_MIN_WORD_RATIO || "0.9"), 0.5, 0.98);
-const FEATURE_CONTINUE_TAIL_CHARS = clampInt(parseInt(process.env.FEATURE_CONTINUE_TAIL_CHARS || "2200", 10), 800, 6000);
+// Feature writing enforcement (more aggressive defaults)
+const FEATURE_CONTINUE_PASSES = clampInt(parseInt(process.env.FEATURE_CONTINUE_PASSES || "4", 10), 0, 10);
+const FEATURE_MIN_WORD_RATIO = clampFloat(parseFloat(process.env.FEATURE_MIN_WORD_RATIO || "0.96"), 0.5, 0.995);
+const FEATURE_CONTINUE_TAIL_CHARS = clampInt(parseInt(process.env.FEATURE_CONTINUE_TAIL_CHARS || "3500", 10), 800, 8000);
 const FEATURE_DEBUG_CHUNKS = process.env.FEATURE_DEBUG_CHUNKS === "1";
 
 // Optional: final “top-off” passes if the stitched script is still under minimum pages
-const FEATURE_FINAL_TOP_OFF_PASSES = clampInt(parseInt(process.env.FEATURE_FINAL_TOP_OFF_PASSES || "2", 10), 0, 4);
+const FEATURE_FINAL_TOP_OFF_PASSES = clampInt(parseInt(process.env.FEATURE_FINAL_TOP_OFF_PASSES || "5", 10), 0, 10);
 
 // ---------- Helpers for OpenAI calls ----------
 
@@ -100,12 +103,13 @@ type ChatOptions = {
   temperature?: number;
 
   /**
-   * ✅ IMPORTANT:
-   * Some models reject `max_tokens` and require `max_completion_tokens`.
-   * We keep `max_tokens` as an alias for your existing code, but we DO NOT send it to OpenAI.
+   * ✅ Token controls:
+   * For Chat Completions, `max_tokens` is the standard.
+   * Some providers/models require `max_completion_tokens` instead.
+   * We send max_tokens by default, and auto-retry if unsupported.
    */
+  max_tokens?: number;
   max_completion_tokens?: number;
-  max_tokens?: number; // alias (never forwarded)
 
   // Supported params (optional)
   top_p?: number;
@@ -225,12 +229,25 @@ function extractOpenAIErrorInfo(err: any): {
   return { status, code, type, param, message };
 }
 
+function isParamUnsupported(err: any, paramName: string) {
+  const info = extractOpenAIErrorInfo(err);
+  const msg = String(info.message || "").toLowerCase();
+  const p = String(info.param || "").toLowerCase();
+  const want = String(paramName || "").toLowerCase();
+
+  if (p === want) return true;
+
+  // common wording
+  if (msg.includes("unsupported parameter") && msg.includes(want)) return true;
+  if (msg.includes("unknown parameter") && msg.includes(want)) return true;
+  if (msg.includes("unexpected parameter") && msg.includes(want)) return true;
+  if (msg.includes("invalid parameter") && msg.includes(want)) return true;
+
+  return false;
+}
+
 /**
  * ✅ PATCH: replace the old isModelAccessOrNotFound helper
- * This now correctly detects:
- * - 403 "project does not have access to model"
- * - 404 "model_not_found"
- * - SDK errors where message/code live under err.error.*
  */
 function isModelAccessOrNotFound(err: any) {
   const info = extractOpenAIErrorInfo(err);
@@ -239,17 +256,14 @@ function isModelAccessOrNotFound(err: any) {
   const type = String(info.type || "").toLowerCase();
   const status = Number(info.status || 0);
 
-  // Class-name hints in some SDK errors (safe, optional)
   const name = String(err?.name || "").toLowerCase();
 
   if (status === 403 || status === 404) return true;
   if (name.includes("notfound") || name.includes("permission") || name.includes("forbidden")) return true;
 
-  // Common OpenAI codes/types for model issues
   if (code === "model_not_found" || code === "not_found") return true;
   if (type === "not_found_error" || type === "permission_denied" || type === "insufficient_permissions") return true;
 
-  // Message patterns seen in real logs
   if (msg.includes("does not have access to model")) return true;
   if (msg.includes("model_not_found")) return true;
   if (msg.includes("no such model")) return true;
@@ -261,10 +275,6 @@ function isModelAccessOrNotFound(err: any) {
 
 /**
  * ✅ PATCH: replace the old isTemperatureUnsupported helper
- * This now detects the common OpenAI error wording:
- * - "Unsupported value: 'temperature'..."
- * - param="temperature"
- * - messages that mention temperature + unsupported/invalid
  */
 function isTemperatureUnsupported(err: any) {
   const info = extractOpenAIErrorInfo(err);
@@ -272,27 +282,27 @@ function isTemperatureUnsupported(err: any) {
   const param = String(info.param || "").toLowerCase();
   const status = Number(info.status || 0);
 
-  // Most of these are 400s, but don’t hard-require it.
   const mentionsTemp = param === "temperature" || msg.includes("temperature");
-
   if (!mentionsTemp) return false;
 
   if (msg.includes("unsupported value") && msg.includes("temperature")) return true;
   if (msg.includes("unsupported") && msg.includes("temperature")) return true;
   if (msg.includes("invalid") && msg.includes("temperature")) return true;
-
-  // Specific phrasing we’ve seen:
   if (msg.includes("only the default") && msg.includes("temperature")) return true;
   if (msg.includes("default (1)") && msg.includes("temperature")) return true;
 
-  // Some stacks wrap as generic “bad request”
   if (status === 400 && mentionsTemp && (msg.includes("supported") || msg.includes("allowed"))) return true;
 
   return false;
 }
 
+/**
+ * ✅ IMPORTANT FIX:
+ * - Default to `max_tokens` for chat.completions
+ * - Cap it to avoid provider hard limits
+ * - createChatCompletionWithFallback will swap to max_completion_tokens if needed
+ */
 function pickCompletionParams(options: ChatOptions) {
-  // Only include keys OpenAI accepts — prevents “unknown param” crashes.
   const out: any = {};
 
   // ✅ Temperature is OFF by default
@@ -300,18 +310,18 @@ function pickCompletionParams(options: ChatOptions) {
     out.temperature = options.temperature;
   }
 
-  // ✅ Use max_completion_tokens (never max_tokens)
-  const mctRaw =
-    typeof options.max_completion_tokens === "number"
-      ? options.max_completion_tokens
-      : typeof options.max_tokens === "number"
+  // Token target
+  const raw =
+    typeof options.max_tokens === "number"
       ? options.max_tokens
+      : typeof options.max_completion_tokens === "number"
+      ? options.max_completion_tokens
       : undefined;
 
-  if (typeof mctRaw === "number") {
-    const cap = Number.isFinite(MAX_COMPLETION_TOKENS_CAP) ? MAX_COMPLETION_TOKENS_CAP : 8192;
-    const mct = Math.max(1, Math.min(mctRaw, cap));
-    out.max_completion_tokens = mct;
+  if (typeof raw === "number") {
+    const cap = Number.isFinite(MAX_COMPLETION_TOKENS_CAP) ? MAX_COMPLETION_TOKENS_CAP : 12000;
+    const v = Math.max(64, Math.min(Math.trunc(raw), cap));
+    out.max_tokens = v; // ✅ default for chat.completions
   }
 
   if (typeof options.top_p === "number") out.top_p = options.top_p;
@@ -339,7 +349,6 @@ function extractMsgContent(choice: any): string {
   const content = choice?.message?.content ?? "";
   if (typeof content === "string") return content;
 
-  // Some SDKs can return array content parts; join text parts if present
   if (Array.isArray(content)) {
     return content
       .map((p: any) => {
@@ -376,17 +385,13 @@ function looksTruncatedJson(raw: string) {
   const closesA = (t.match(/\]/g) || []).length;
   if (opensA > closesA) return true;
 
-  // If it ends mid-escape, it's likely truncated too
   if (t.endsWith("\\")) return true;
 
   return false;
 }
 
 /**
- * ✅ safer JSON parse:
- * - detects likely truncation and returns null (prevents "partial object" mis-parse)
- * - strips fences
- * - attempts best-effort extraction of largest {...} object
+ * ✅ safer JSON parse
  */
 function safeParse<T = any>(raw: string, tag = "json"): T | null {
   try {
@@ -400,7 +405,6 @@ function safeParse<T = any>(raw: string, tag = "json"): T | null {
     return JSON.parse(cleaned) as T;
   } catch (e) {
     const str = stripCodeFences(String(raw ?? ""));
-    // Try object extraction
     const i = str.indexOf("{");
     const j = str.lastIndexOf("}");
     if (i >= 0 && j > i) {
@@ -411,7 +415,6 @@ function safeParse<T = any>(raw: string, tag = "json"): T | null {
         } catch {}
       }
     }
-    // Try array extraction
     const a = str.indexOf("[");
     const b = str.lastIndexOf("]");
     if (a >= 0 && b > a) {
@@ -427,10 +430,34 @@ function safeParse<T = any>(raw: string, tag = "json"): T | null {
   }
 }
 
+function swapToMaxCompletionTokens(payload: any) {
+  if (!payload) return payload;
+  const p = { ...payload };
+  const v = p.max_tokens;
+  if (typeof v === "number") {
+    delete p.max_tokens;
+    p.max_completion_tokens = v;
+  }
+  return p;
+}
+
+function swapToMaxTokens(payload: any) {
+  if (!payload) return payload;
+  const p = { ...payload };
+  const v = p.max_completion_tokens;
+  if (typeof v === "number") {
+    delete p.max_completion_tokens;
+    p.max_tokens = v;
+  }
+  return p;
+}
+
 /**
  * ✅ Core wrapper:
  * - tries model candidates (env model → chat alias → fallback)
- * - if model rejects temperature, retries without temperature (even if OPENAI_SEND_TEMPERATURE=1)
+ * - retries for:
+ *   - temperature unsupported
+ *   - max_tokens vs max_completion_tokens incompatibilities
  */
 async function createChatCompletionWithFallback(
   payload: any,
@@ -445,22 +472,40 @@ async function createChatCompletionWithFallback(
     try {
       const basePayload = { ...payload, model };
 
+      // 1) Try as-is
       try {
         return await openai.chat.completions.create(basePayload, { timeout });
-      } catch (err: any) {
-        // If temperature is rejected, retry same model once without temperature
-        if (isTemperatureUnsupported(err) && basePayload.temperature !== undefined) {
+      } catch (err1: any) {
+        // 2) If temperature rejected, retry same model once without temperature (and often top_p too)
+        if (isTemperatureUnsupported(err1) && basePayload.temperature !== undefined) {
           const retryPayload = { ...basePayload };
           delete retryPayload.temperature;
-          delete retryPayload.top_p; // optional: some models pair restrictions; safe to remove too
+          delete retryPayload.top_p;
+          try {
+            return await openai.chat.completions.create(retryPayload, { timeout });
+          } catch (err2: any) {
+            err1 = err2;
+          }
+        }
+
+        // 3) If token param rejected, swap and retry
+        if (isParamUnsupported(err1, "max_tokens") && basePayload.max_tokens !== undefined) {
+          const retryPayload = swapToMaxCompletionTokens(basePayload);
           return await openai.chat.completions.create(retryPayload, { timeout });
         }
-        throw err;
+        if (
+          isParamUnsupported(err1, "max_completion_tokens") &&
+          basePayload.max_completion_tokens !== undefined
+        ) {
+          const retryPayload = swapToMaxTokens(basePayload);
+          return await openai.chat.completions.create(retryPayload, { timeout });
+        }
+
+        throw err1;
       }
     } catch (err: any) {
       lastErr = err;
 
-      // If this is a model availability/access problem, try next candidate
       if (isModelAccessOrNotFound(err)) {
         if (DEBUG_OUTLINE) {
           console.log(`[${tag}] model failed: ${model} → trying next. msg=${String(err?.message || "")}`);
@@ -468,12 +513,10 @@ async function createChatCompletionWithFallback(
         continue;
       }
 
-      // Otherwise, this is a real failure
       throw err;
     }
   }
 
-  // All candidates failed
   throw lastErr || new Error(`[${tag}] all model candidates failed`);
 }
 
@@ -481,7 +524,6 @@ async function callOpenAI(
   prompt: string,
   options: ChatOptions = {}
 ): Promise<{ content: string; finish_reason: string }> {
-  // JSON-oriented helper (use for simple JSON calls)
   const candidates = modelCandidatesForChat(options.model || MODEL_JSON_RAW, FALLBACK_MODEL_JSON);
   const timeout = typeof options.timeout_ms === "number" ? options.timeout_ms : DEFAULT_JSON_CALL_TIMEOUT_MS;
 
@@ -518,7 +560,6 @@ async function callOpenAIText(
   prompt: string,
   options: ChatOptions = {}
 ): Promise<{ content: string; finish_reason: string }> {
-  // Text-only helper (use for screenplay chunks). No JSON formatting pressure.
   const candidates = modelCandidatesForChat(options.model || MODEL_TEXT_RAW, FALLBACK_MODEL_TEXT);
   const timeout = typeof options.timeout_ms === "number" ? options.timeout_ms : DEFAULT_TEXT_CALL_TIMEOUT_MS;
 
@@ -547,9 +588,7 @@ FORMAT RULES:
       ],
       ...pickCompletionParams({
         ...options,
-        // Keep a safe default (works even on models that only support default temperature)
         temperature: typeof options.temperature === "number" ? options.temperature : 1,
-        // alias-supported: will become max_completion_tokens
         max_tokens: typeof options.max_tokens === "number" ? options.max_tokens : 4096,
         max_completion_tokens:
           typeof options.max_completion_tokens === "number" ? options.max_completion_tokens : undefined,
@@ -658,7 +697,6 @@ async function callOpenAIJsonSchema<T>(
     }
   }
 
-  // Fallback: JSON mode
   const { content, finish_reason } = await callOpenAI(prompt, {
     ...options,
     temperature: typeof options.temperature === "number" ? options.temperature : 0.3,
@@ -805,7 +843,6 @@ function stripTheEndLines(text: string) {
 
 /**
  * Removes repeated overlap when continuation starts by reprinting the tail.
- * Finds the largest suffix of `prev` that is also a prefix of `next` (up to maxScan chars).
  */
 function removeOverlap(prev: string, next: string, maxScan = 1600) {
   const a = normalizeNewlines(prev);
@@ -815,7 +852,6 @@ function removeOverlap(prev: string, next: string, maxScan = 1600) {
   const aTail = a.slice(Math.max(0, a.length - maxScan));
   const maxK = Math.min(aTail.length, b.length);
 
-  // try longer overlaps first
   for (let k = maxK; k >= 80; k--) {
     const suffix = aTail.slice(aTail.length - k);
     if (b.startsWith(suffix)) {
@@ -823,7 +859,6 @@ function removeOverlap(prev: string, next: string, maxScan = 1600) {
     }
   }
 
-  // also guard if it repeats the exact last line
   const lastLine = lastNonEmptyLine(a);
   if (lastLine && b.startsWith(lastLine)) {
     return b.slice(lastLine.length).trimStart();
@@ -869,8 +904,7 @@ function parseLengthToMinutes(raw: string): number {
 }
 
 /**
- * ✅ Safer: only removes duplicate FADE IN lines (line-anchored),
- * so it won't accidentally remove "fade in" in action/dialogue.
+ * ✅ Safer: only removes duplicate FADE IN lines (line-anchored)
  */
 function stripExtraFadeIn(text: string) {
   const raw = (text || "").replace(/\r\n/g, "\n").trim();
@@ -1410,7 +1444,6 @@ ${raw}
 
 /**
  * ✅ Act-splitting scenes (3 small calls) to prevent huge JSON truncation.
- * This is now the primary method for features (targetPages >= 45).
  */
 async function getActSplitOutline(params: {
   idea: string;
@@ -1904,7 +1937,7 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
 
     const { content: scriptText } = await callOpenAIText(writePrompt, {
       temperature: 1,
-      max_tokens: 4096,
+      max_tokens: 6000,
       model: MODEL_TEXT_RAW,
       request_tag: "short-script",
     });
@@ -1930,7 +1963,6 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
   const shortScript: ShortScriptItem[] = outlineParsed.shortScript || [];
   const effectiveScenes = Math.max(1, shortScript.length || approxScenes);
 
-  // Tuned chunk count: fewer, larger chunks for epic features → better continuity + longer pages
   const chunkCount =
     targetPages <= 45 ? 4 :
     targetPages <= 70 ? 6 :
@@ -1941,17 +1973,17 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
   const safeChunkCount = Math.min(chunkCount, effectiveScenes);
   const pagesPerChunk = Math.ceil(targetPages / safeChunkCount);
 
-  // Use calibrated words-per-page math (export-safe)
-  const MIN_WPP = Math.max(140, Math.round(SCRIPT_WORDS_PER_PAGE * 0.95));
-  const AIM_WPP = Math.max(MIN_WPP, Math.round(SCRIPT_WORDS_PER_PAGE * 1.10));
-  const MAX_WPP = Math.max(AIM_WPP + 20, Math.round(SCRIPT_WORDS_PER_PAGE * 1.25));
+  // Calibrated words-per-page math
+  const MIN_WPP = Math.max(160, Math.round(SCRIPT_WORDS_PER_PAGE * 1.0));
+  const AIM_WPP = Math.max(MIN_WPP, Math.round(SCRIPT_WORDS_PER_PAGE * 1.15));
+  const MAX_WPP = Math.max(AIM_WPP + 20, Math.round(SCRIPT_WORDS_PER_PAGE * 1.35));
 
-  const minWords = Math.max(1000, Math.round(pagesPerChunk * MIN_WPP));
+  const minWords = Math.max(1400, Math.round(pagesPerChunk * MIN_WPP));
   const aimWords = Math.max(minWords, Math.round(pagesPerChunk * AIM_WPP));
   const maxWords = Math.max(aimWords + 250, Math.round(pagesPerChunk * MAX_WPP));
 
-  // Heavier budgets for 120-min features (more headroom; still respects OPENAI_MAX_COMPLETION_TOKENS_CAP)
-  const maxTokensPerChunk = clamp(Math.round(maxWords * 1.7), 6000, 12000);
+  // Token budget (words→tokens approx)
+  const maxTokensPerChunk = clamp(Math.round(maxWords * 1.9), 5000, 12000);
 
   const chunkRanges = Array.from({ length: safeChunkCount }, (_, idx) => {
     const startScene = Math.floor(idx * (effectiveScenes / safeChunkCount)) + 1;
@@ -1982,7 +2014,6 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     | { ok: true; content: string }
     | { ok: false; content: string; error: unknown };
 
-  // ✅ Default stability > speed (you can override via env)
   const envConc = parseInt(process.env.SCRIPT_CHUNK_CONCURRENCY || "2", 10);
   const chunkConcurrency = clamp(Number.isFinite(envConc) ? envConc : 2, 1, 6);
 
@@ -2000,6 +2031,8 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     const isStart = index === 0;
     const isFinal = index === chunkInputs.length - 1;
     const plan = plans?.[index];
+
+    const strictFeature = targetPages >= 90; // ✅ enforce real length for features
 
     const chunkPrompt = `
 Write a continuous portion of a feature screenplay in **Fountain** format.
@@ -2039,7 +2072,6 @@ ${chunk.beats}
 `.trim();
 
     try {
-      // First pass
       const first = await callOpenAIText(chunkPrompt, {
         temperature: 1,
         max_tokens: maxTokensPerChunk,
@@ -2051,15 +2083,17 @@ ${chunk.beats}
       let combined = normalizeNewlines(first.content || "").trim();
       if (!combined) throw new Error("Empty chunk content");
 
-      // Ensure marker exists (even if model forgets)
       if (!/^\s*\[\[CHUNK_END\]\]\s*$/im.test(combined)) {
         combined = `${combined}\n\n[[CHUNK_END]]\n`;
       }
 
-      // Enforce minimum length with CONTINUE passes
-      const minTarget = Math.round(minWords * FEATURE_MIN_WORD_RATIO);
+      // ✅ enforce strict minimum for features
+      const minTarget = strictFeature ? minWords : Math.round(minWords * FEATURE_MIN_WORD_RATIO);
+      const extraPasses = strictFeature ? 2 : 0;
+      const passLimit = FEATURE_CONTINUE_PASSES + extraPasses;
 
       let words = countWords(stripChunkMarkers(combined));
+
       logChunk(`part-${chunk.part}-initial`, {
         words,
         minTarget,
@@ -2070,7 +2104,7 @@ ${chunk.beats}
         endScene: chunk.endScene,
       });
 
-      for (let pass = 1; pass <= FEATURE_CONTINUE_PASSES; pass++) {
+      for (let pass = 1; pass <= passLimit; pass++) {
         if (words >= minTarget) break;
 
         const prevClean = stripChunkMarkers(combined);
@@ -2078,8 +2112,8 @@ ${chunk.beats}
         const lastLine = lastNonEmptyLine(prevClean);
         const lastSlug = extractLastSlugline(prevClean);
 
-        const needMore = minTarget - words;
-        const addWordsTarget = clampInt(Math.round(needMore * 1.25), 500, Math.round(aimWords * 0.85));
+        const needMore = Math.max(0, minTarget - words);
+        const addWordsTarget = clampInt(Math.round(Math.max(700, needMore * 1.15)), 700, Math.round(aimWords * 1.1));
 
         const continuePrompt = `
 Continue the SAME screenplay portion in **Fountain** format.
@@ -2126,17 +2160,14 @@ At the END of your continuation, print:
         let contText = normalizeNewlines(cont.content || "").trim();
         if (!contText) break;
 
-        // Ensure marker exists
         if (!/^\s*\[\[CHUNK_END\]\]\s*$/im.test(contText)) {
           contText = `${contText}\n\n[[CHUNK_END]]\n`;
         }
 
-        // Remove overlap if model repeats the tail
         const prevNoMarker = stripChunkMarkers(combined);
         const contNoMarker = stripChunkMarkers(contText);
-        const cleanedContNoMarker = removeOverlap(prevNoMarker, contNoMarker, 2200);
+        const cleanedContNoMarker = removeOverlap(prevNoMarker, contNoMarker, 2600);
 
-        // Rebuild combined with a single marker at end
         combined = `${prevNoMarker.trim()}\n\n${cleanedContNoMarker.trim()}\n\n[[CHUNK_END]]\n`;
 
         words = countWords(stripChunkMarkers(combined));
@@ -2149,9 +2180,22 @@ At the END of your continuation, print:
         });
       }
 
-      // Final safety trim
       combined = combined.trim();
       if (!combined) throw new Error("Chunk became empty after processing");
+
+      // If still short on strict features, log it (even without FEATURE_DEBUG_CHUNKS)
+      if (targetPages >= 90) {
+        const w = countWords(stripChunkMarkers(combined));
+        if (w < minWords) {
+          console.log("[feature-chunk] WARNING chunk under minWords", {
+            part: chunk.part,
+            words: w,
+            minWords,
+            startScene: chunk.startScene,
+            endScene: chunk.endScene,
+          });
+        }
+      }
 
       return { ok: true, content: combined };
     } catch (error) {
@@ -2205,7 +2249,6 @@ MUST AVOID: ${(plan.mustAvoid || []).join(", ")}\n\n` : ""}${chunk.beats}
     return note;
   });
 
-  // Strip markers and stitch with overlap protection across chunk boundaries
   let stitched = "";
   for (const rawChunk of stitchedChunks.filter(Boolean)) {
     const cleaned = stripChunkMarkers(rawChunk);
@@ -2213,7 +2256,7 @@ MUST AVOID: ${(plan.mustAvoid || []).join(", ")}\n\n` : ""}${chunk.beats}
       stitched = cleaned.trim();
       continue;
     }
-    const addition = removeOverlap(stitched, cleaned, 2400);
+    const addition = removeOverlap(stitched, cleaned, 2600);
     stitched = `${stitched.trimEnd()}\n\n${addition.trimStart()}`.trim();
   }
 
@@ -2221,24 +2264,35 @@ MUST AVOID: ${(plan.mustAvoid || []).join(", ")}\n\n` : ""}${chunk.beats}
   scriptFountain = stripTheEndLines(scriptFountain);
 
   // Optional debug: final page estimate
+  const w0 = countWords(scriptFountain);
+  const p0 = estimatePagesFromWords(w0, SCRIPT_WORDS_PER_PAGE);
   if (FEATURE_DEBUG_CHUNKS) {
-    const w = countWords(scriptFountain);
     console.log("[feature-script] final words/pages", {
-      words: w,
-      estPages: estimatePagesFromWords(w, SCRIPT_WORDS_PER_PAGE),
+      words: w0,
+      estPages: p0,
       targetPages,
       wordsPerPage: SCRIPT_WORDS_PER_PAGE,
     });
   }
 
-  // ✅ Final “top-off” if you still end up too short (helps reach >= 90 pages for 120-min targets)
+  // ✅ Final “top-off” if still too short
   const minFinalPagesWanted =
-    targetPages >= 110 ? 90 :
-    targetPages >= 90 ? 75 :
-    Math.max(1, Math.round(targetPages * 0.8));
+    targetPages >= 110 ? 95 :
+    targetPages >= 90 ? 80 :
+    Math.max(1, Math.round(targetPages * 0.85));
 
-  let finalWords = countWords(scriptFountain);
-  let finalPages = estimatePagesFromWords(finalWords, SCRIPT_WORDS_PER_PAGE);
+  let finalWords = w0;
+  let finalPages = p0;
+
+  if (finalPages < minFinalPagesWanted) {
+    console.log("[feature-script] WARNING short feature before topoff", {
+      finalWords,
+      finalPages,
+      minFinalPagesWanted,
+      targetPages,
+      wordsPerPage: SCRIPT_WORDS_PER_PAGE,
+    });
+  }
 
   if (finalPages < minFinalPagesWanted && FEATURE_FINAL_TOP_OFF_PASSES > 0) {
     for (let pass = 1; pass <= FEATURE_FINAL_TOP_OFF_PASSES; pass++) {
@@ -2248,7 +2302,7 @@ MUST AVOID: ${(plan.mustAvoid || []).join(", ")}\n\n` : ""}${chunk.beats}
 
       const needPages = Math.max(1, minFinalPagesWanted - finalPages);
       const needWords = needPages * SCRIPT_WORDS_PER_PAGE;
-      const addWordsTarget = clampInt(Math.round(needWords * 1.2), 900, 6500);
+      const addWordsTarget = clampInt(Math.round(needWords * 1.25), 1500, 9000);
 
       const prevClean = scriptFountain.trim();
       const tailText = tail(prevClean, FEATURE_CONTINUE_TAIL_CHARS);
@@ -2261,7 +2315,6 @@ Continue the SAME screenplay in **Fountain** format to increase runtime/page cou
 STRICT:
 - Add at least ~${addWordsTarget} NEW words of screenplay text (dialogue + action).
 - Do NOT repeat any existing text.
-- Do NOT print [[CHUNK_END]] until you have added ~${addWordsTarget} new words.
 - No meta headings, no explanations, no “PART”, no summaries.
 - Do NOT write "THE END".
 
@@ -2274,12 +2327,9 @@ LAST_OUTPUT_TAIL (for continuity; do NOT copy it):
 <<<
 ${tailText}
 >>>
-
-At the END of your continuation, print:
-[[CHUNK_END]]
 `.trim();
 
-      const maxTokensTopOff = clamp(Math.round(addWordsTarget * 1.8), 3200, 12000);
+      const maxTokensTopOff = clamp(Math.round(addWordsTarget * 2.0), 4000, 12000);
 
       const cont = await callOpenAIText(topOffPrompt, {
         temperature: 1,
@@ -2292,21 +2342,18 @@ At the END of your continuation, print:
       let contText = normalizeNewlines(cont.content || "").trim();
       if (!contText) break;
 
-      if (!/^\s*\[\[CHUNK_END\]\]\s*$/im.test(contText)) {
-        contText = `${contText}\n\n[[CHUNK_END]]\n`;
-      }
-
-      const contNoMarker = stripChunkMarkers(contText);
-      const cleanedAdd = removeOverlap(scriptFountain, contNoMarker, 2600);
-
+      const cleanedAdd = removeOverlap(scriptFountain, contText, 3000);
       scriptFountain = stripTheEndLines(`${scriptFountain.trimEnd()}\n\n${cleanedAdd.trimStart()}`.trim());
+
+      finalWords = countWords(scriptFountain);
+      finalPages = estimatePagesFromWords(finalWords, SCRIPT_WORDS_PER_PAGE);
+
       if (FEATURE_DEBUG_CHUNKS) {
-        const w = countWords(scriptFountain);
         console.log("[feature-topoff] pass", {
           pass,
           addWordsTarget,
-          words: w,
-          estPages: estimatePagesFromWords(w, SCRIPT_WORDS_PER_PAGE),
+          words: finalWords,
+          estPages: finalPages,
           minFinalPagesWanted,
         });
       }
@@ -2590,7 +2637,6 @@ Rules:
 // ---------- Sound Assets ----------
 
 export const generateSoundAssets = async (script: string, genre: string) => {
-  // ✅ Derive an approximate runtime from script words instead of "first number in text"
   const words = countWords(script);
   const approxMinutes = clampInt(Math.round(words / SCRIPT_WORDS_PER_PAGE), 5, 180);
 

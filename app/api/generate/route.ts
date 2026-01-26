@@ -84,11 +84,15 @@ function clampMinutes(mins: number): number {
   return Math.max(1, Math.min(240, Math.round(mins)));
 }
 
-function estimatePagesByWords(text: string, wordsPerPage = 220): number {
-  const words = String(text || "")
+function countWords(text: string): number {
+  return String(text || "")
     .trim()
     .split(/\s+/)
     .filter(Boolean).length;
+}
+
+function estimatePagesByWords(text: string, wordsPerPage = 220): number {
+  const words = countWords(text);
   return Math.max(1, Math.round(words / wordsPerPage));
 }
 
@@ -166,7 +170,6 @@ function normalizeOpenAIError(error: any): { status: number; message: string; hi
     lower.includes("does not have access to model") ||
     lower.includes("model_not_found") ||
     lower.includes("no such model") ||
-    // be careful with generic "not found" — keep it late
     lower.includes("not found")
   ) {
     const hint =
@@ -258,6 +261,13 @@ async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise
   }
 }
 
+function minPagesTargetForMinutes(minutes: number): number {
+  // For feature-length: guarantee at least 90 pages, and at least 75% of target minutes as pages.
+  if (minutes >= 100) return Math.max(90, Math.round(minutes * 0.75));
+  // For shorter scripts keep a gentle baseline.
+  return Math.max(10, Math.round(minutes * 0.85));
+}
+
 async function generateScriptData(movieIdea: string, movieGenre: string, scriptLength: string, requestId: string) {
   const minutes = parseDurationToMinutes(scriptLength);
   const normalizedLength = `${minutes} min`;
@@ -268,19 +278,23 @@ async function generateScriptData(movieIdea: string, movieGenre: string, scriptL
     requestedLength: scriptLength,
     parsedMinutes: minutes,
     normalizedLength,
+
     // ✅ Safe env echo (helps catch “wrong project/env vars not deployed”)
     modelText: process.env.OPENAI_MODEL_TEXT || "(unset)",
     modelJson: process.env.OPENAI_MODEL_JSON || "(unset)",
     fallbackText: process.env.OPENAI_FALLBACK_MODEL_TEXT || "(unset)",
     fallbackJson: process.env.OPENAI_FALLBACK_MODEL_JSON || "(unset)",
+
+    // ✅ Feature length controls (these MUST show up in prod logs if deployed)
+    FEATURE_DEBUG_CHUNKS: process.env.FEATURE_DEBUG_CHUNKS || "(unset)",
+    FEATURE_CONTINUE_PASSES: process.env.FEATURE_CONTINUE_PASSES || "(unset)",
+    FEATURE_MIN_WORD_RATIO: process.env.FEATURE_MIN_WORD_RATIO || "(unset)",
+    FEATURE_CONTINUE_TAIL_CHARS: process.env.FEATURE_CONTINUE_TAIL_CHARS || "(unset)",
+    SCRIPT_CHUNK_CONCURRENCY: process.env.SCRIPT_CHUNK_CONCURRENCY || "(unset)",
+    OPENAI_MAX_COMPLETION_TOKENS_CAP: process.env.OPENAI_MAX_COMPLETION_TOKENS_CAP || "(unset)",
+
     vercelMaxDuration: String(maxDuration),
     stepScriptTrimChars: STEP_SCRIPT_TRIM_CHARS,
-featureDebugChunks: process.env.FEATURE_DEBUG_CHUNKS || "(unset)",
-featureContinuePasses: process.env.FEATURE_CONTINUE_PASSES || "(unset)",
-featureMinWordRatio: process.env.FEATURE_MIN_WORD_RATIO || "(unset)",
-featureTailChars: process.env.FEATURE_CONTINUE_TAIL_CHARS || "(unset)",
-chunkConcurrency: process.env.SCRIPT_CHUNK_CONCURRENCY || "(unset)",
-maxCompletionCap: process.env.OPENAI_MAX_COMPLETION_TOKENS_CAP || "(unset)",
   });
 
   // ✅ Script generation can take a while. Keep a route-side guard too.
@@ -309,11 +323,18 @@ maxCompletionCap: process.env.OPENAI_MAX_COMPLETION_TOKENS_CAP || "(unset)",
     console.error(`[${requestId}] Failed to generate characters:`, err);
   }
 
-  // Stats
+  // Stats + length check
+  const words = countWords(scriptText);
   const estPages = estimatePagesByWords(scriptText, 220);
   const sceneCount = countScenes(scriptText);
+  const minPages = minPagesTargetForMinutes(minutes);
+  const tooShort = minutes >= 100 && estPages < minPages;
+
   console.log(`[${requestId}] Script stats:`, {
+    words,
     estPages,
+    minPagesTarget: minPages,
+    tooShort,
     targetMinutes: minutes,
     sceneCount,
     characterCount: characters.length,
@@ -327,7 +348,10 @@ maxCompletionCap: process.env.OPENAI_MAX_COMPLETION_TOKENS_CAP || "(unset)",
     themes,
     characters,
     stats: {
+      words,
       estimatedPages: estPages,
+      minPagesTarget: minPages,
+      tooShort,
       targetMinutes: minutes,
       sceneCount,
       characterCount: characters.length,
@@ -370,6 +394,15 @@ export async function POST(request: NextRequest) {
       hasScript: !!script,
       hasScriptContent: !!scriptContent,
       charactersCount: Array.isArray(characters) ? characters.length : 0,
+
+      // ✅ echo feature env controls on every request
+      FEATURE_DEBUG_CHUNKS: process.env.FEATURE_DEBUG_CHUNKS || "(unset)",
+      FEATURE_CONTINUE_PASSES: process.env.FEATURE_CONTINUE_PASSES || "(unset)",
+      FEATURE_MIN_WORD_RATIO: process.env.FEATURE_MIN_WORD_RATIO || "(unset)",
+      FEATURE_CONTINUE_TAIL_CHARS: process.env.FEATURE_CONTINUE_TAIL_CHARS || "(unset)",
+      SCRIPT_CHUNK_CONCURRENCY: process.env.SCRIPT_CHUNK_CONCURRENCY || "(unset)",
+      OPENAI_MAX_COMPLETION_TOKENS_CAP: process.env.OPENAI_MAX_COMPLETION_TOKENS_CAP || "(unset)",
+
       modelText: process.env.OPENAI_MODEL_TEXT || "(unset)",
       modelJson: process.env.OPENAI_MODEL_JSON || "(unset)",
       fallbackText: process.env.OPENAI_FALLBACK_MODEL_TEXT || "(unset)",
@@ -397,6 +430,16 @@ export async function POST(request: NextRequest) {
       const scriptResult = await generateScriptData(String(movieIdea), String(movieGenre), String(scriptLength), requestId);
       const minutes = parseDurationToMinutes(String(scriptLength));
 
+      const warning =
+        scriptResult.stats.tooShort
+          ? {
+              code: "SCRIPT_TOO_SHORT_FOR_FEATURE",
+              message: `Generated script appears short for ${minutes} min selection (${scriptResult.stats.estimatedPages} pages est; target >= ${scriptResult.stats.minPagesTarget}).`,
+              hint:
+                "Fix is in lib/generators.ts: ensure feature continuation/padding is active in prod. Set FEATURE_CONTINUE_PASSES=4, FEATURE_MIN_WORD_RATIO=0.95, FEATURE_CONTINUE_TAIL_CHARS=3500, OPENAI_MAX_COMPLETION_TOKENS_CAP=12000 and redeploy. Also set FEATURE_DEBUG_CHUNKS=1 to verify pad passes run.",
+            }
+          : null;
+
       return NextResponse.json({
         requestId,
         idea: movieIdea,
@@ -410,6 +453,7 @@ export async function POST(request: NextRequest) {
         themes: scriptResult.themes,
         characters: scriptResult.characters,
         stats: scriptResult.stats,
+        warning,
         meta: {
           step: "script",
           ms: Date.now() - startedAt,
@@ -433,6 +477,14 @@ export async function POST(request: NextRequest) {
         const scriptResult = await generateScriptData(String(movieIdea), String(movieGenre), String(scriptLength), requestId);
         const minutes = parseDurationToMinutes(String(scriptLength));
 
+        const warning =
+          scriptResult.stats.tooShort
+            ? {
+                code: "SCRIPT_TOO_SHORT_FOR_FEATURE",
+                message: `Generated script appears short for ${minutes} min selection (${scriptResult.stats.estimatedPages} pages est; target >= ${scriptResult.stats.minPagesTarget}).`,
+              }
+            : null;
+
         return NextResponse.json({
           requestId,
           idea: movieIdea,
@@ -446,6 +498,7 @@ export async function POST(request: NextRequest) {
           themes: scriptResult.themes,
           characters: scriptResult.characters,
           stats: scriptResult.stats,
+          warning,
           meta: { step, ms: Date.now() - startedAt },
         });
       }
