@@ -275,6 +275,12 @@ async function generateScriptData(movieIdea: string, movieGenre: string, scriptL
     fallbackJson: process.env.OPENAI_FALLBACK_MODEL_JSON || "(unset)",
     vercelMaxDuration: String(maxDuration),
     stepScriptTrimChars: STEP_SCRIPT_TRIM_CHARS,
+featureDebugChunks: process.env.FEATURE_DEBUG_CHUNKS || "(unset)",
+featureContinuePasses: process.env.FEATURE_CONTINUE_PASSES || "(unset)",
+featureMinWordRatio: process.env.FEATURE_MIN_WORD_RATIO || "(unset)",
+featureTailChars: process.env.FEATURE_CONTINUE_TAIL_CHARS || "(unset)",
+chunkConcurrency: process.env.SCRIPT_CHUNK_CONCURRENCY || "(unset)",
+maxCompletionCap: process.env.OPENAI_MAX_COMPLETION_TOKENS_CAP || "(unset)",
   });
 
   // ✅ Script generation can take a while. Keep a route-side guard too.

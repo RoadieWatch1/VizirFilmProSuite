@@ -78,11 +78,18 @@ const DEFAULT_TEXT_CALL_TIMEOUT_MS = parseInt(process.env.DEFAULT_TEXT_CALL_TIME
 // Optional: cap completion tokens to avoid model hard-limit errors (override if you know your model supports more)
 const MAX_COMPLETION_TOKENS_CAP = parseInt(process.env.OPENAI_MAX_COMPLETION_TOKENS_CAP || "8192", 10);
 
+// ✅ Page/words calibration (lets you align “page count” with your exporter)
+// Default is classic rough screenplay math. If your export renders fewer pages, LOWER this number (e.g., 180).
+const SCRIPT_WORDS_PER_PAGE = clampInt(parseInt(process.env.SCRIPT_WORDS_PER_PAGE || "220", 10), 160, 320);
+
 // Feature writing enforcement (new)
-const FEATURE_CONTINUE_PASSES = clampInt(parseInt(process.env.FEATURE_CONTINUE_PASSES || "2", 10), 0, 4);
+const FEATURE_CONTINUE_PASSES = clampInt(parseInt(process.env.FEATURE_CONTINUE_PASSES || "2", 10), 0, 8);
 const FEATURE_MIN_WORD_RATIO = clampFloat(parseFloat(process.env.FEATURE_MIN_WORD_RATIO || "0.9"), 0.5, 0.98);
 const FEATURE_CONTINUE_TAIL_CHARS = clampInt(parseInt(process.env.FEATURE_CONTINUE_TAIL_CHARS || "2200", 10), 800, 6000);
 const FEATURE_DEBUG_CHUNKS = process.env.FEATURE_DEBUG_CHUNKS === "1";
+
+// Optional: final “top-off” passes if the stitched script is still under minimum pages
+const FEATURE_FINAL_TOP_OFF_PASSES = clampInt(parseInt(process.env.FEATURE_FINAL_TOP_OFF_PASSES || "2", 10), 0, 4);
 
 // ---------- Helpers for OpenAI calls ----------
 
@@ -754,7 +761,7 @@ function countWords(text: string) {
   return t.split(/\s+/).filter(Boolean).length;
 }
 
-function estimatePagesFromWords(words: number, wordsPerPage = 220) {
+function estimatePagesFromWords(words: number, wordsPerPage = SCRIPT_WORDS_PER_PAGE) {
   if (!wordsPerPage || wordsPerPage <= 0) return 0;
   return Math.max(1, Math.round(words / wordsPerPage));
 }
@@ -788,6 +795,12 @@ function extractLastSlugline(text: string) {
     if (re.test(ln)) return ln;
   }
   return "";
+}
+
+function stripTheEndLines(text: string) {
+  return String(text || "")
+    .replace(/^\s*THE END\.?\s*$/gim, "")
+    .trim();
 }
 
 /**
@@ -1829,7 +1842,7 @@ ${idea}
 
 Specifications:
 - Title: Create a catchy title
-- Length: Aim for ${targetPages} pages total (1 page ≈ 1 minute, ~220 words per page)
+- Length: Aim for ${targetPages} pages total (1 page ≈ 1 minute, ~${SCRIPT_WORDS_PER_PAGE} words per page)
 - Scenes: Between ${minScenes} and ${maxScenes} scenes
 - Characters: Up to ${numCharacters} main characters
 - Structure: ${structureGuide}
@@ -1877,7 +1890,7 @@ Constraints:
       };
 
     const writePrompt = `
-Write a screenplay in Fountain format of ~${targetPages} pages (1 page ≈ 220 words).
+Write a screenplay in Fountain format of ~${targetPages} pages (1 page ≈ ~${SCRIPT_WORDS_PER_PAGE} words).
 Start with FADE IN: and include the opening scene heading.
 Output screenplay text ONLY. No JSON. No commentary.
 
@@ -1928,12 +1941,17 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
   const safeChunkCount = Math.min(chunkCount, effectiveScenes);
   const pagesPerChunk = Math.ceil(targetPages / safeChunkCount);
 
-  const minWords = Math.max(1000, Math.round(pagesPerChunk * 210));
-  const aimWords = Math.max(minWords, Math.round(pagesPerChunk * 245));
-  const maxWords = Math.max(aimWords + 250, Math.round(pagesPerChunk * 275));
+  // Use calibrated words-per-page math (export-safe)
+  const MIN_WPP = Math.max(140, Math.round(SCRIPT_WORDS_PER_PAGE * 0.95));
+  const AIM_WPP = Math.max(MIN_WPP, Math.round(SCRIPT_WORDS_PER_PAGE * 1.10));
+  const MAX_WPP = Math.max(AIM_WPP + 20, Math.round(SCRIPT_WORDS_PER_PAGE * 1.25));
 
-  // Heavier budgets for 120-min features
-  const maxTokensPerChunk = clamp(Math.round(maxWords * 1.45), 5200, 12000);
+  const minWords = Math.max(1000, Math.round(pagesPerChunk * MIN_WPP));
+  const aimWords = Math.max(minWords, Math.round(pagesPerChunk * AIM_WPP));
+  const maxWords = Math.max(aimWords + 250, Math.round(pagesPerChunk * MAX_WPP));
+
+  // Heavier budgets for 120-min features (more headroom; still respects OPENAI_MAX_COMPLETION_TOKENS_CAP)
+  const maxTokensPerChunk = clamp(Math.round(maxWords * 1.7), 6000, 12000);
 
   const chunkRanges = Array.from({ length: safeChunkCount }, (_, idx) => {
     const startScene = Math.floor(idx * (effectiveScenes / safeChunkCount)) + 1;
@@ -1964,8 +1982,9 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     | { ok: true; content: string }
     | { ok: false; content: string; error: unknown };
 
-  const envConc = parseInt(process.env.SCRIPT_CHUNK_CONCURRENCY || "4", 10);
-  const chunkConcurrency = clamp(Number.isFinite(envConc) ? envConc : 4, 1, 6);
+  // ✅ Default stability > speed (you can override via env)
+  const envConc = parseInt(process.env.SCRIPT_CHUNK_CONCURRENCY || "2", 10);
+  const chunkConcurrency = clamp(Number.isFinite(envConc) ? envConc : 2, 1, 6);
 
   function logChunk(tag: string, data: any) {
     if (FEATURE_DEBUG_CHUNKS) console.log(`[feature-chunk] ${tag}`, data);
@@ -1994,6 +2013,7 @@ Themes: ${(outlineParsed.themes || []).slice(0, 6).join(", ")}
 SCOPE:
 - This portion covers scenes #${chunk.startScene} through #${chunk.endScene}.
 - LENGTH REQUIREMENT: Minimum ${minWords} words (target ~${aimWords}, max ~${maxWords}).
+- IMPORTANT: Do NOT print the [[CHUNK_END]] marker until you have written AT LEAST ${minWords} words.
 - Scenes must feel like real screenplay pages: action beats + dialogue exchanges + blocking.
 - Avoid summarizing. Write the actual screenplay lines.
 
@@ -2036,7 +2056,7 @@ ${chunk.beats}
         combined = `${combined}\n\n[[CHUNK_END]]\n`;
       }
 
-      // Enforce minimum length with CONTINUE passes (new)
+      // Enforce minimum length with CONTINUE passes
       const minTarget = Math.round(minWords * FEATURE_MIN_WORD_RATIO);
 
       let words = countWords(stripChunkMarkers(combined));
@@ -2059,7 +2079,7 @@ ${chunk.beats}
         const lastSlug = extractLastSlugline(prevClean);
 
         const needMore = minTarget - words;
-        const addWordsTarget = clampInt(Math.round(needMore * 1.15), 350, Math.round(aimWords * 0.7));
+        const addWordsTarget = clampInt(Math.round(needMore * 1.25), 500, Math.round(aimWords * 0.85));
 
         const continuePrompt = `
 Continue the SAME screenplay portion in **Fountain** format.
@@ -2072,9 +2092,9 @@ CRITICAL RULES (no repetition):
 - If you're still in the same scene, continue that scene.
 - If that scene naturally ends, move to the next scene (still within scenes #${chunk.startScene}–#${chunk.endScene}).
 
-LENGTH:
-- Add at least ~${addWordsTarget} new words of screenplay text (dialogue + action).
-- Keep it cinematic. Expand beats with blocking, subtext, and physical business.
+LENGTH (STRICT):
+- Add at least ~${addWordsTarget} NEW words of screenplay text (dialogue + action).
+- Do NOT print [[CHUNK_END]] until you have added ~${addWordsTarget} new words.
 
 DO NOT:
 - Do not output "FADE IN:".
@@ -2114,7 +2134,7 @@ At the END of your continuation, print:
         // Remove overlap if model repeats the tail
         const prevNoMarker = stripChunkMarkers(combined);
         const contNoMarker = stripChunkMarkers(contText);
-        const cleanedContNoMarker = removeOverlap(prevNoMarker, contNoMarker, 2000);
+        const cleanedContNoMarker = removeOverlap(prevNoMarker, contNoMarker, 2200);
 
         // Rebuild combined with a single marker at end
         combined = `${prevNoMarker.trim()}\n\n${cleanedContNoMarker.trim()}\n\n[[CHUNK_END]]\n`;
@@ -2193,16 +2213,104 @@ MUST AVOID: ${(plan.mustAvoid || []).join(", ")}\n\n` : ""}${chunk.beats}
       stitched = cleaned.trim();
       continue;
     }
-    const addition = removeOverlap(stitched, cleaned, 2200);
+    const addition = removeOverlap(stitched, cleaned, 2400);
     stitched = `${stitched.trimEnd()}\n\n${addition.trimStart()}`.trim();
   }
 
-  const scriptFountain = stripExtraFadeIn(stitched);
+  let scriptFountain = stripExtraFadeIn(stitched);
+  scriptFountain = stripTheEndLines(scriptFountain);
 
   // Optional debug: final page estimate
   if (FEATURE_DEBUG_CHUNKS) {
     const w = countWords(scriptFountain);
-    console.log("[feature-script] final words/pages", { words: w, estPages: estimatePagesFromWords(w, 220), targetPages });
+    console.log("[feature-script] final words/pages", {
+      words: w,
+      estPages: estimatePagesFromWords(w, SCRIPT_WORDS_PER_PAGE),
+      targetPages,
+      wordsPerPage: SCRIPT_WORDS_PER_PAGE,
+    });
+  }
+
+  // ✅ Final “top-off” if you still end up too short (helps reach >= 90 pages for 120-min targets)
+  const minFinalPagesWanted =
+    targetPages >= 110 ? 90 :
+    targetPages >= 90 ? 75 :
+    Math.max(1, Math.round(targetPages * 0.8));
+
+  let finalWords = countWords(scriptFountain);
+  let finalPages = estimatePagesFromWords(finalWords, SCRIPT_WORDS_PER_PAGE);
+
+  if (finalPages < minFinalPagesWanted && FEATURE_FINAL_TOP_OFF_PASSES > 0) {
+    for (let pass = 1; pass <= FEATURE_FINAL_TOP_OFF_PASSES; pass++) {
+      finalWords = countWords(scriptFountain);
+      finalPages = estimatePagesFromWords(finalWords, SCRIPT_WORDS_PER_PAGE);
+      if (finalPages >= minFinalPagesWanted) break;
+
+      const needPages = Math.max(1, minFinalPagesWanted - finalPages);
+      const needWords = needPages * SCRIPT_WORDS_PER_PAGE;
+      const addWordsTarget = clampInt(Math.round(needWords * 1.2), 900, 6500);
+
+      const prevClean = scriptFountain.trim();
+      const tailText = tail(prevClean, FEATURE_CONTINUE_TAIL_CHARS);
+      const lastLine = lastNonEmptyLine(prevClean);
+      const lastSlug = extractLastSlugline(prevClean);
+
+      const topOffPrompt = `
+Continue the SAME screenplay in **Fountain** format to increase runtime/page count.
+
+STRICT:
+- Add at least ~${addWordsTarget} NEW words of screenplay text (dialogue + action).
+- Do NOT repeat any existing text.
+- Do NOT print [[CHUNK_END]] until you have added ~${addWordsTarget} new words.
+- No meta headings, no explanations, no “PART”, no summaries.
+- Do NOT write "THE END".
+
+If the story already feels concluded, extend the denouement/aftermath with 1–3 additional short scenes that feel natural and cinematic.
+
+Anchor (last slugline if any): ${lastSlug || "(none found)"}
+Exact last line (do NOT repeat it): ${lastLine || "(none)"}
+
+LAST_OUTPUT_TAIL (for continuity; do NOT copy it):
+<<<
+${tailText}
+>>>
+
+At the END of your continuation, print:
+[[CHUNK_END]]
+`.trim();
+
+      const maxTokensTopOff = clamp(Math.round(addWordsTarget * 1.8), 3200, 12000);
+
+      const cont = await callOpenAIText(topOffPrompt, {
+        temperature: 1,
+        max_tokens: maxTokensTopOff,
+        timeout_ms: DEFAULT_TEXT_CALL_TIMEOUT_MS,
+        model: MODEL_TEXT_RAW,
+        request_tag: `feature-topoff-${pass}`,
+      });
+
+      let contText = normalizeNewlines(cont.content || "").trim();
+      if (!contText) break;
+
+      if (!/^\s*\[\[CHUNK_END\]\]\s*$/im.test(contText)) {
+        contText = `${contText}\n\n[[CHUNK_END]]\n`;
+      }
+
+      const contNoMarker = stripChunkMarkers(contText);
+      const cleanedAdd = removeOverlap(scriptFountain, contNoMarker, 2600);
+
+      scriptFountain = stripTheEndLines(`${scriptFountain.trimEnd()}\n\n${cleanedAdd.trimStart()}`.trim());
+      if (FEATURE_DEBUG_CHUNKS) {
+        const w = countWords(scriptFountain);
+        console.log("[feature-topoff] pass", {
+          pass,
+          addWordsTarget,
+          words: w,
+          estPages: estimatePagesFromWords(w, SCRIPT_WORDS_PER_PAGE),
+          minFinalPagesWanted,
+        });
+      }
+    }
   }
 
   return {
@@ -2484,7 +2592,7 @@ Rules:
 export const generateSoundAssets = async (script: string, genre: string) => {
   // ✅ Derive an approximate runtime from script words instead of "first number in text"
   const words = countWords(script);
-  const approxMinutes = clampInt(Math.round(words / 220), 5, 180);
+  const approxMinutes = clampInt(Math.round(words / SCRIPT_WORDS_PER_PAGE), 5, 180);
 
   const numAssets = approxMinutes <= 15 ? 5 : approxMinutes <= 60 ? 8 : 15;
 
