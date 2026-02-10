@@ -66,10 +66,10 @@ const OUTLINE_CALL_TIMEOUT_MS = parseInt(process.env.OUTLINE_CALL_TIMEOUT_MS || 
 const DEFAULT_JSON_CALL_TIMEOUT_MS = parseInt(process.env.DEFAULT_JSON_CALL_TIMEOUT_MS || "60000", 10); // 60 seconds
 const DEFAULT_TEXT_CALL_TIMEOUT_MS = parseInt(process.env.DEFAULT_TEXT_CALL_TIMEOUT_MS || "120000", 10); // 120 seconds
 // Optional: cap output tokens to avoid model hard-limit errors (override if you know your model supports more)
-const MAX_COMPLETION_TOKENS_CAP = parseInt(process.env.OPENAI_MAX_COMPLETION_TOKENS_CAP || "12000", 10);
+const MAX_COMPLETION_TOKENS_CAP = parseInt(process.env.OPENAI_MAX_COMPLETION_TOKENS_CAP || "16000", 10);
 // ✅ Page/words calibration (lets you align “page count” with your exporter)
 // Default is classic rough screenplay math. If your export renders fewer pages, LOWER this number (e.g., 180).
-const SCRIPT_WORDS_PER_PAGE = clampInt(parseInt(process.env.SCRIPT_WORDS_PER_PAGE || "220", 10), 160, 320);
+const SCRIPT_WORDS_PER_PAGE = clampInt(parseInt(process.env.SCRIPT_WORDS_PER_PAGE || "180", 10), 120, 320);
 // Feature writing enforcement (more aggressive defaults)
 const FEATURE_CONTINUE_PASSES = clampInt(parseInt(process.env.FEATURE_CONTINUE_PASSES || "4", 10), 0, 10);
 const FEATURE_MIN_WORD_RATIO = clampFloat(parseFloat(process.env.FEATURE_MIN_WORD_RATIO || "0.96"), 0.5, 0.995);
@@ -884,34 +884,10 @@ function buildCharactersSchema() {
   };
 }
 function buildStoryboardSchema() {
-  const coverageShotSchema = {
-    type: "object",
-    additionalProperties: false,
-    required: ["scene", "shotNumber", "description", "shotSize", "cameraAngle", "imagePrompt", "imageUrl"],
-    properties: {
-      scene: { type: "string" },
-      shotNumber: { type: "string" },
-      description: { type: "string" },
-      shotSize: { type: "string" },
-      cameraAngle: { type: "string" },
-      cameraMovement: { type: "string" },
-      lens: { type: "string" },
-      lighting: { type: "string" },
-      composition: { type: "string" },
-      duration: { type: "string" },
-      dialogue: { type: "string" },
-      soundEffects: { type: "string" },
-      actionNotes: { type: "string" },
-      transition: { type: "string" },
-      notes: { type: "string" },
-      imagePrompt: { type: "string" },
-      imageUrl: { type: "string" },
-    },
-  };
   const mainShotSchema = {
     type: "object",
     additionalProperties: false,
-    required: ["scene", "shotNumber", "description", "shotSize", "cameraAngle", "lens", "lighting", "composition", "imagePrompt", "imageUrl"],
+    required: ["scene", "shotNumber", "description", "imagePrompt", "imageUrl"],
     properties: {
       scene: { type: "string" },
       shotNumber: { type: "string" },
@@ -930,12 +906,6 @@ function buildStoryboardSchema() {
       notes: { type: "string" },
       imagePrompt: { type: "string" },
       imageUrl: { type: "string" },
-      coverageShots: {
-        type: "array",
-        items: coverageShotSchema,
-        minItems: 0,
-        maxItems: 6,
-      },
     },
   };
   return {
@@ -946,7 +916,7 @@ function buildStoryboardSchema() {
       storyboard: {
         type: "array",
         minItems: 1,
-        maxItems: 200,
+        maxItems: 80,
         items: mainShotSchema,
       },
     },
@@ -1747,15 +1717,15 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     12;
   const safeChunkCount = Math.min(chunkCount, effectiveScenes);
   const pagesPerChunk = Math.ceil(targetPages / safeChunkCount);
-  // Calibrated words-per-page math
-  const MIN_WPP = Math.max(160, Math.round(SCRIPT_WORDS_PER_PAGE * 1.0));
-  const AIM_WPP = Math.max(MIN_WPP, Math.round(SCRIPT_WORDS_PER_PAGE * 1.15));
-  const MAX_WPP = Math.max(AIM_WPP + 20, Math.round(SCRIPT_WORDS_PER_PAGE * 1.35));
-  const minWords = Math.max(1400, Math.round(pagesPerChunk * MIN_WPP));
+  // Calibrated words-per-page math — higher multipliers to ensure sufficient length
+  const MIN_WPP = Math.max(180, Math.round(SCRIPT_WORDS_PER_PAGE * 1.15));
+  const AIM_WPP = Math.max(MIN_WPP, Math.round(SCRIPT_WORDS_PER_PAGE * 1.35));
+  const MAX_WPP = Math.max(AIM_WPP + 30, Math.round(SCRIPT_WORDS_PER_PAGE * 1.6));
+  const minWords = Math.max(1600, Math.round(pagesPerChunk * MIN_WPP));
   const aimWords = Math.max(minWords, Math.round(pagesPerChunk * AIM_WPP));
-  const maxWords = Math.max(aimWords + 250, Math.round(pagesPerChunk * MAX_WPP));
-  // Token budget (words→tokens approx)
-  const maxTokensPerChunk = clamp(Math.round(maxWords * 1.9), 5000, 12000);
+  const maxWords = Math.max(aimWords + 300, Math.round(pagesPerChunk * MAX_WPP));
+  // Token budget (words→tokens approx) — generous to avoid truncation
+  const maxTokensPerChunk = clamp(Math.round(maxWords * 2.5), 6000, 16000);
   const chunkRanges = Array.from({ length: safeChunkCount }, (_, idx) => {
     const startScene = Math.floor(idx * (effectiveScenes / safeChunkCount)) + 1;
     const endScene = Math.min(Math.floor((idx + 1) * (effectiveScenes / safeChunkCount)), effectiveScenes);
@@ -1794,7 +1764,7 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
     const isStart = index === 0;
     const isFinal = index === chunkInputs.length - 1;
     const plan = plans?.[index];
-    const strictFeature = targetPages >= 90; // ✅ enforce real length for features
+    const strictFeature = targetPages >= 30; // ✅ enforce real length for all medium+ scripts
     const chunkPrompt = `
 Write a continuous portion of a feature screenplay in **Fountain** format.
 GLOBAL CONTEXT:
@@ -1804,10 +1774,11 @@ Synopsis: ${outlineParsed.synopsis}
 Themes: ${(outlineParsed.themes || []).slice(0, 6).join(", ")}
 SCOPE:
 - This portion covers scenes #${chunk.startScene} through #${chunk.endScene}.
-- LENGTH REQUIREMENT: Minimum ${minWords} words (target ~${aimWords}, max ~${maxWords}).
-- IMPORTANT: Do NOT print the [[CHUNK_END]] marker until you have written AT LEAST ${minWords} words.
-- Scenes must feel like real screenplay pages: action beats + dialogue exchanges + blocking.
-- Avoid summarizing. Write the actual screenplay lines.
+- LENGTH REQUIREMENT: You MUST write at least ${minWords} words. Target ~${aimWords} words (max ~${maxWords}).
+- CRITICAL: Do NOT print [[CHUNK_END]] until you have written AT LEAST ${minWords} words. Count carefully.
+- Each scene must be FULLY WRITTEN with detailed action lines, complete dialogue exchanges, character blocking, and scene descriptions.
+- Write EVERY line of dialogue. Write EVERY action beat. Do NOT summarize or abbreviate.
+- Each scene should feel like 1-2 real screenplay pages with rich detail.
 FORMAT RULES:
 - ${isStart ? 'Include "FADE IN:" exactly once at the very start.' : 'Do NOT include "FADE IN:". Start with the first scene heading.'}
 - Use proper slug lines (INT./EXT.) and write cinematic action + dialogue.
@@ -1992,10 +1963,11 @@ MUST AVOID: ${(plan.mustAvoid || []).join(", ")}\n\n` : ""}${chunk.beats}
   }
   // ✅ Final "top-off" if still too short — tighter enforcement
   const minFinalPagesWanted =
-    targetPages >= 110 ? Math.max(100, Math.round(targetPages * 0.88)) :
-    targetPages >= 90 ? Math.max(82, Math.round(targetPages * 0.9)) :
-    targetPages >= 60 ? Math.max(52, Math.round(targetPages * 0.88)) :
-    Math.max(1, Math.round(targetPages * 0.9));
+    targetPages >= 110 ? Math.max(100, Math.round(targetPages * 0.9)) :
+    targetPages >= 90 ? Math.max(85, Math.round(targetPages * 0.92)) :
+    targetPages >= 60 ? Math.max(55, Math.round(targetPages * 0.9)) :
+    targetPages >= 30 ? Math.max(26, Math.round(targetPages * 0.9)) :
+    Math.max(1, Math.round(targetPages * 0.85));
   let finalWords = w0;
   let finalPages = p0;
   if (finalPages < minFinalPagesWanted) {
@@ -2034,7 +2006,7 @@ LAST_OUTPUT_TAIL (for continuity; do NOT copy it):
 ${tailText}
 >>>
 `.trim();
-      const maxTokensTopOff = clamp(Math.round(addWordsTarget * 2.0), 4000, 12000);
+      const maxTokensTopOff = clamp(Math.round(addWordsTarget * 2.5), 5000, 16000);
       const cont = await callOpenAIText(topOffPrompt, {
         temperature: 1,
         max_tokens: maxTokensTopOff,
@@ -2109,10 +2081,10 @@ export const generateStoryboard = async ({
   characters: Character[];
 }) => {
   const duration = parseLengthToMinutes(scriptLength);
-  const numFrames = duration <= 5 ? 8 : duration <= 15 ? 15 : duration <= 30 ? 25 : duration <= 60 ? 40 : 80;
-  const coveragePerFrame = duration > 15 ? 3 : 2;
-  // Scale token budget with frame count
-  const storyboardMaxTokens = clamp(Math.round(numFrames * 120), 4500, 12000);
+  // Reduced frame counts to fit within token budget (no coverage shots in initial generation)
+  const numFrames = duration <= 5 ? 6 : duration <= 15 ? 10 : duration <= 30 ? 16 : duration <= 60 ? 24 : 32;
+  // Scale token budget: ~350 tokens per frame for all fields, raise cap to 16000
+  const storyboardMaxTokens = clamp(Math.round(numFrames * 350), 4000, 16000);
   const charSummary = characters.slice(0, 10).map(c =>
     `${c.name} (${c.role}): ${c.visualDescription || c.description || ""}`.slice(0, 200)
   ).join("\n");
@@ -2129,36 +2101,31 @@ ${charSummary}
 
 REQUIREMENTS — GENERATE EXACTLY ${numFrames} MAIN FRAMES:
 
-For EACH main frame, fill in ALL of these fields with real professional terminology:
-- scene: The scene heading (e.g. "INT. WAREHOUSE - NIGHT")
+For EACH main frame, provide these fields:
+- scene: Scene heading (e.g. "INT. WAREHOUSE - NIGHT")
 - shotNumber: Sequential shot ID (e.g. "1A", "1B", "2A")
-- description: What is visually happening in the frame (2-3 sentences, vivid and specific)
-- shotSize: One of: ECU (Extreme Close-Up), CU (Close-Up), MCU (Medium Close-Up), MS (Medium Shot), MLS (Medium Long Shot), LS (Long Shot), ELS (Extreme Long Shot), OS (Over-the-Shoulder), POV (Point of View), 2-Shot, Insert
-- cameraAngle: One of: Eye Level, Low Angle, High Angle, Dutch/Tilted, Bird's Eye, Worm's Eye, Overhead
-- cameraMovement: One of: Static, Pan Left, Pan Right, Tilt Up, Tilt Down, Dolly In, Dolly Out, Tracking Left, Tracking Right, Crane Up, Crane Down, Handheld, Steadicam, Zoom In, Zoom Out, Whip Pan, Arc
-- lens: Specific focal length with purpose (e.g. "24mm Wide — establishing space", "85mm — intimate portrait", "135mm Telephoto — compression")
-- lighting: Specific setup (e.g. "Low key — single hard source from camera left", "Rembrandt — key right, fill left at 2:1 ratio", "Silhouette — strong backlight only", "Practical — desk lamp and window")
-- composition: Describe framing rule (e.g. "Rule of thirds — subject left third, negative space right", "Center frame — symmetrical", "Leading lines — hallway converging to subject", "Frame within frame — doorway")
-- duration: Shot duration in seconds (e.g. "3s", "5s", "8s")
-- dialogue: Any dialogue spoken during this shot (or empty string)
-- soundEffects: Key sound design elements (or empty string)
-- actionNotes: Blocking and choreography details — where actors move, what they do with their hands/body (or empty string)
-- transition: How this shot transitions to the next (e.g. "CUT TO:", "DISSOLVE TO:", "SMASH CUT:", "MATCH CUT:", "J-CUT:", "L-CUT:") — last frame can be "FADE TO BLACK."
-- notes: Director notes — emotional tone, pacing intent, visual references (or empty string)
-- imagePrompt: A DETAILED visual description for generating a BLACK AND WHITE PENCIL SKETCH storyboard panel. MUST start with: "Black and white pencil sketch storyboard panel, hand-drawn style, clean line art." Then describe: the exact composition, character positions, environment details, lighting direction with hatching/cross-hatching, perspective, and mood. Be specific about what is visible in the frame. Do NOT mention color. Always describe it as if drawn on paper.
-- imageUrl: Always empty string ""
+- description: What is visually happening (2-3 sentences, vivid and specific)
+- shotSize: ECU, CU, MCU, MS, MLS, LS, ELS, OS, POV, 2-Shot, or Insert
+- cameraAngle: Eye Level, Low Angle, High Angle, Dutch/Tilted, Bird's Eye, Worm's Eye, or Overhead
+- cameraMovement: Static, Pan Left, Pan Right, Tilt Up, Tilt Down, Dolly In, Dolly Out, Tracking, Crane, Handheld, Steadicam, Zoom In, Zoom Out
+- lens: Focal length (e.g. "24mm Wide", "85mm Portrait", "135mm Telephoto")
+- lighting: Setup (e.g. "Low key — single hard source", "Rembrandt", "Silhouette", "High Key")
+- composition: Framing rule (e.g. "Rule of thirds — subject right", "Center frame", "Leading lines")
+- duration: Shot duration (e.g. "3s", "5s")
+- dialogue: Dialogue spoken (or "")
+- soundEffects: Sound design (or "")
+- actionNotes: Blocking/choreography (or "")
+- transition: CUT TO:, DISSOLVE TO:, SMASH CUT:, MATCH CUT:, etc. Last frame: "FADE TO BLACK."
+- notes: Director notes (or "")
+- imagePrompt: MUST start with "Black and white pencil sketch storyboard panel, hand-drawn style, clean line art." Then describe composition, characters, environment, lighting with hatching, perspective, mood. No color.
+- imageUrl: Always ""
 
-Each main frame should include ~${coveragePerFrame} coverage shots in the "coverageShots" array, with the same field structure (these are alternate angles/sizes for editing coverage).
+SHOT VARIETY:
+- Mix ECU, CU, MS, LS — don't repeat the same size 3+ times in a row
+- Use ELS/LS establishing shots at new scenes
+- CU for emotional beats, MS for dialogue, tracking for dynamic moments
 
-SHOT VARIETY RULES:
-- Vary shot sizes: mix ECU, CU, MS, LS throughout — don't repeat the same size 3+ times in a row
-- Use establishing shots (ELS/LS) at the start of each new scene/location
-- Use close-ups for emotional beats and dialogue emphasis
-- Use medium shots for two-person dialogue and blocking
-- Use movement shots (dolly, tracking) for dynamic moments
-- Every scene should have at least one wide and one close shot
-
-Return JSON with key "storyboard" containing the array of main frames.
+Return JSON: { "storyboard": [ ... ] }
 `.trim();
   const res = await callOpenAIJsonSchema<{ storyboard: StoryboardFrame[] }>(prompt, buildStoryboardSchema(), {
     temperature: 0.4,
@@ -2183,18 +2150,7 @@ Return JSON with key "storyboard" containing the array of main frames.
       ? String(f.imagePrompt)
       : `${BW_PREFIX} ${String(f.imagePrompt || f.description || "A cinematic storyboard frame.")}`,
     imageUrl: "",
-    coverageShots: Array.isArray(f.coverageShots)
-      ? f.coverageShots.map((c, j) => ({
-          ...c,
-          shotNumber: String(c.shotNumber || `${idx + 1}${String.fromCharCode(66 + j)}`),
-          shotSize: String(c.shotSize || "MS"),
-          cameraAngle: String(c.cameraAngle || "Eye Level"),
-          imagePrompt: String(c.imagePrompt || "").startsWith("Black and white")
-            ? String(c.imagePrompt)
-            : `${BW_PREFIX} ${String(c.imagePrompt || c.description || "Coverage storyboard shot.")}`,
-          imageUrl: "",
-        }))
-      : [],
+    coverageShots: [],
   }));
   return frames;
 };

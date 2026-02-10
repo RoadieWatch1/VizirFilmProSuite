@@ -23,7 +23,7 @@ export const maxDuration = 800;
 const STEP_SCRIPT_TRIM_CHARS = parseInt(process.env.STEP_SCRIPT_TRIM_CHARS || "24000", 10);
 
 // ✅ Page/words calibration (sync with lib/generators.ts)
-const SCRIPT_WORDS_PER_PAGE = Math.max(160, Math.min(320, parseInt(process.env.SCRIPT_WORDS_PER_PAGE || "220", 10)));
+const SCRIPT_WORDS_PER_PAGE = Math.max(120, Math.min(320, parseInt(process.env.SCRIPT_WORDS_PER_PAGE || "180", 10)));
 
 // ✅ Allow step-mode for script-only generation too (useful for debugging)
 const ALLOWED_STEPS = new Set([
@@ -265,11 +265,11 @@ async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise
 }
 
 function minPagesTargetForMinutes(minutes: number): number {
-  // Tighter enforcement: scripts should be at least ~88-90% of target pages
-  if (minutes >= 110) return Math.max(100, Math.round(minutes * 0.88));
-  if (minutes >= 90) return Math.max(82, Math.round(minutes * 0.9));
-  if (minutes >= 60) return Math.max(52, Math.round(minutes * 0.88));
-  if (minutes >= 30) return Math.max(25, Math.round(minutes * 0.9));
+  // Tighter enforcement: scripts should be at least ~90-92% of target pages
+  if (minutes >= 110) return Math.max(100, Math.round(minutes * 0.9));
+  if (minutes >= 90) return Math.max(85, Math.round(minutes * 0.92));
+  if (minutes >= 60) return Math.max(55, Math.round(minutes * 0.9));
+  if (minutes >= 30) return Math.max(26, Math.round(minutes * 0.9));
   return Math.max(5, Math.round(minutes * 0.85));
 }
 
@@ -588,7 +588,7 @@ export async function POST(request: NextRequest) {
           requestId,
           storyboard: (frames || []).map((frame) => ({
             ...mapShot(frame),
-            coverageShots: (frame.coverageShots || []).map(mapShot),
+            coverageShots: Array.isArray(frame.coverageShots) ? frame.coverageShots.map(mapShot) : [],
           })),
           meta: { step, ms: Date.now() - startedAt },
         });
