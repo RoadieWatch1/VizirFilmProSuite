@@ -66,9 +66,8 @@ export async function POST(request: NextRequest) {
 
     // Generate and send ZIP
     const blob = await zip.generateAsync({ type: "arraybuffer" });
-    const buffer = Buffer.from(blob);
 
-    return new NextResponse(buffer, {
+    return new NextResponse(blob, {
       status: 200,
       headers: {
         "Content-Type": "application/zip",

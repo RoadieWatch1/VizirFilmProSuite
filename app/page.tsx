@@ -261,11 +261,16 @@ export default function HomePage() {
   }
 
   return (
-    <div className={cn("min-h-screen cinematic-gradient relative overflow-hidden")}>
-      {/* Background Film Icon */}
-      <div className={cn("film-icon-bg")}>
-        <Film size={500} className={cn("text-[#FF6A00]")} />
-      </div>
+    <div
+      className={cn("min-h-screen relative overflow-hidden")}
+      style={{
+        backgroundImage:
+          "linear-gradient(165deg, rgba(9,20,22,0.85) 0%, rgba(13,34,37,0.80) 40%, rgba(11,30,32,0.85) 100%), url('/images/background.png')",
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundRepeat: "no-repeat",
+      }}
+    >
 
       <div className={cn("relative z-10 container mx-auto px-4 py-12")}>
         <div className={cn("max-w-4xl mx-auto")}>
