@@ -7,8 +7,8 @@ import {
   Plus,
   Play,
   Pause,
-  Pause as PauseIcon,
-  Loader2
+  Loader2,
+  Download
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -28,7 +28,10 @@ export default function SoundPage() {
   const { filmPackage, updateFilmPackage } = useFilmStore();
   const [loading, setLoading] = useState(false);
   const [playingId, setPlayingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+
+  const soundAssets: SoundAsset[] = filmPackage?.soundAssets || [];
 
   const handleGenerateSound = async () => {
     if (!filmPackage?.script || !filmPackage?.genre) {
@@ -37,6 +40,7 @@ export default function SoundPage() {
     }
 
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch("/api/sound", {
         method: "POST",
@@ -50,28 +54,66 @@ export default function SoundPage() {
       });
 
       if (!res.ok) {
-        throw new Error("Failed to generate sound assets");
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData?.error || "Failed to generate sound assets");
       }
 
       const data = await res.json();
-      console.log("🎧 Generated SoundAssets:", data.soundAssets);
+      console.log("Generated SoundAssets:", data.soundAssets);
 
       const cleanAssets = (data.soundAssets || []).filter((a: SoundAsset) => !!a.audioUrl);
 
       updateFilmPackage({
         soundAssets: cleanAssets,
       });
-
-      alert("Sound assets generated successfully!");
-    } catch (error) {
-      console.error("Failed to generate sound assets:", error);
-      alert("An error occurred while generating sound assets. Please try again.");
+    } catch (err: any) {
+      console.error("Failed to generate sound assets:", err);
+      setError(err?.message || "An error occurred while generating sound assets. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
-  const soundAssets: SoundAsset[] = filmPackage?.soundAssets || [];
+  const handleDownloadSoundAssets = async () => {
+    if (soundAssets.length === 0) {
+      alert("No sound assets to download. Please generate sound design first.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await fetch("/api/download-sound", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ soundAssets }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to download sound assets.");
+      }
+
+      // Create blob and download
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `sound_design_${new Date().getTime()}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      alert("✅ Sound design package downloaded successfully!");
+    } catch (error: any) {
+      console.error("Failed to download sound assets:", error);
+      alert("Failed to download. Please check that audio files are available.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handlePlay = (id: string, audioUrl?: string) => {
     if (playingId === id) {
@@ -118,6 +160,12 @@ export default function SoundPage() {
               </p>
             </div>
 
+            {error && (
+              <div className="text-red-400 text-center p-3 bg-red-400/10 rounded-lg mb-4">
+                {error}
+              </div>
+            )}
+
             <Card className="glass-effect border-[#FF6A00]/20 p-8 text-center">
               <h3 className="text-xl font-semibold text-white mb-4">No Sound Assets Yet</h3>
               <p className="text-[#B2C8C9] mb-6">
@@ -162,10 +210,20 @@ export default function SoundPage() {
               <h1 className="text-3xl font-bold text-white mb-2">Sound Library</h1>
               <p className="text-[#B2C8C9]">Audio assets and sound design</p>
             </div>
-            <Button className="bg-[#FF6A00] hover:bg-[#E55A00] text-white mt-4 md:mt-0">
-              <Plus className="w-4 h-4 mr-2" />
-              Add Asset
-            </Button>
+            <div className="flex gap-2 flex-wrap">
+              <Button 
+                onClick={handleDownloadSoundAssets}
+                disabled={loading || soundAssets.length === 0}
+                className="bg-green-600 hover:bg-green-700 text-white mt-4 md:mt-0"
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Download Package
+              </Button>
+              <Button className="bg-[#FF6A00] hover:bg-[#E55A00] text-white mt-4 md:mt-0">
+                <Plus className="w-4 h-4 mr-2" />
+                Add Asset
+              </Button>
+            </div>
           </div>
 
           <div className="space-y-4">
@@ -234,7 +292,7 @@ export default function SoundPage() {
                           : "text-[#8da3a4] hover:text-white hover:bg-[#14484a]"
                       }`}
                     >
-                      {isPlaying ? <PauseIcon className="w-5 h-5" /> : <Play className="w-5 h-5" />}
+                      {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
                     </Button>
                   </div>
                 </Card>

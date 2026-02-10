@@ -85,6 +85,18 @@ interface FilmStore {
   validateAndUpdateRuntime: () => void; // Added to validate and update runtime
 }
 
+// Matches SCRIPT_WORDS_PER_PAGE in lib/generators.ts
+const WORDS_PER_PAGE = 180;
+
+function countWordsForEstimate(text: string): number {
+  return (text || "").trim().split(/\s+/).filter(Boolean).length;
+}
+
+function estimatePages(script: string): number {
+  const words = countWordsForEstimate(script);
+  return Math.max(1, Math.round(words / WORDS_PER_PAGE));
+}
+
 export const useFilmStore = create<FilmStore>()(
   persist(
     (set, get) => ({
@@ -95,22 +107,20 @@ export const useFilmStore = create<FilmStore>()(
         const current = get().filmPackage ?? {};
         const newPackage = { ...current, ...updates };
 
-        // Log script and character stats
         if (updates.script) {
-          const estPages = Math.round(updates.script.split("\n").length / 40);
+          const estPages = estimatePages(updates.script);
           const sceneCount = (updates.script.match(/^(INT\.|EXT\.)/gm) || []).length;
           console.log("Updating filmPackage with script:", {
-            scriptLength: updates.script.length,
+            words: countWordsForEstimate(updates.script),
             estPages,
             sceneCount,
             characterCount: updates.characters?.length || 0,
           });
         }
 
-        // Validate script length against expected duration
         if (updates.length && updates.script) {
           const duration = parseInt(updates.length.replace(/\D/g, ""), 10) || 5;
-          const estPages = Math.round(updates.script.split("\n").length / 40);
+          const estPages = estimatePages(updates.script);
           if (estPages < duration * 0.8) {
             console.warn(
               `Script too short: ${estPages} pages for ${duration}-minute film. Expected ~${duration} pages.`
@@ -122,11 +132,10 @@ export const useFilmStore = create<FilmStore>()(
       },
 
       replaceFilmPackage: (newPackage) => {
-        // Log stats for full package replacement
-        const estPages = newPackage.script ? Math.round(newPackage.script.split("\n").length / 40) : 0;
+        const estPages = newPackage.script ? estimatePages(newPackage.script) : 0;
         const sceneCount = newPackage.script ? (newPackage.script.match(/^(INT\.|EXT\.)/gm) || []).length : 0;
         console.log("Replacing filmPackage:", {
-          scriptLength: newPackage.script?.length || 0,
+          words: newPackage.script ? countWordsForEstimate(newPackage.script) : 0,
           estPages,
           sceneCount,
           characterCount: newPackage.characters?.length || 0,
@@ -153,8 +162,8 @@ export const useFilmStore = create<FilmStore>()(
         }
 
         const duration = parseInt(current.length.replace(/\D/g, ""), 10) || 5;
-        const estPages = Math.round(current.script.split("\n").length / 40);
-        const estimatedRuntime = `${estPages} min`; // 1 page ≈ 1 minute
+        const estPages = estimatePages(current.script);
+        const estimatedRuntime = `${estPages} min`;
 
         if (estPages < duration * 0.8) {
           console.warn(

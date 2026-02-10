@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Users, Plus, User, Loader2 } from "lucide-react";
+import { Users, Plus, User, Loader2, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -148,6 +148,48 @@ export default function CharactersPage() {
     } catch (error) {
       console.error("Failed to generate portrait:", error);
       setError("Error generating portrait. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDownloadCharacters = async () => {
+    if (characters.length === 0) {
+      alert("No characters to download.");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/download-characters", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ characters }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to download characters.");
+      }
+
+      // Create blob and download
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `characters_${new Date().getTime()}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      alert("✅ Character package downloaded successfully!");
+    } catch (error: any) {
+      console.error("Failed to download characters:", error);
+      setError("Failed to download character package. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -310,7 +352,7 @@ export default function CharactersPage() {
                 Character profiles and visual development
               </p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <Button
                 onClick={handleGenerateCharacters}
                 disabled={loading}
@@ -324,6 +366,14 @@ export default function CharactersPage() {
                 ) : (
                   "Generate Characters"
                 )}
+              </Button>
+              <Button
+                onClick={handleDownloadCharacters}
+                disabled={loading || characters.length === 0}
+                className="bg-green-600 hover:bg-green-700 text-white mt-4 md:mt-0"
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Download Package
               </Button>
               <Button
                 onClick={() => setShowForm(!showForm)}

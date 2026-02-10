@@ -666,7 +666,6 @@ export async function POST(request: NextRequest) {
         requestId,
         error: normalized.message || "Failed to generate film package. Please try again later.",
         hint: normalized.hint,
-        details: error?.stack || "No stack trace available",
         meta: {
           ms: Date.now() - startedAt,
           modelText: process.env.OPENAI_MODEL_TEXT || "(unset)",

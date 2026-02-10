@@ -2042,24 +2042,44 @@ ${tailText}
 // ---------- Characters ----------
 export const generateCharacters = async (script: string, genre: string) => {
   const prompt = `
-Given this film script:
+You are an expert film character developer. Analyze this ${genre} film script and create REALISTIC, COHERENT character profiles that actually appear in and drive the narrative.
+
+SCRIPT:
 ${script}
-Generate detailed character profiles for ALL main and supporting characters in this ${genre} film.
+
+YOUR TASK:
+1. Identify ALL main characters (protagonists, antagonists, key supporting roles) who actually appear in the script
+2. For each character, extract their story role, arc, relationships, and how they drive the plot
+3. Generate realistic visual descriptions that fit the ${genre} genre and story context
+4. Create personality traits and moods consistent with the character's story role
+
+CRITICAL REQUIREMENTS:
+- ONLY include characters that actually appear in the script
+- Each character's description must reference their role in the story
+- Traits must be 3-5 specific personality characteristics relevant to their story arc
+- Visual descriptions must be detailed (50+ words), cinematic, and film-production-ready
+- Include physical appearance, clothing style, and distinctive features grounded in the story
+- Consider genre conventions: ${genre} films typically feature [list context about character types in this genre]
+- Mood should reflect the character's emotional baseline or primary emotional state in the story
+
 Return JSON: { "characters": [...] } with the exact fields:
-- name
-- role
-- description
-- traits (array)
-- skinColor
-- hairColor
-- clothingColor
-- mood
-- visualDescription
-- imageUrl (empty string)
+- name: Character name as it appears in script
+- role: Clear role in story (e.g., "Protagonist", "Antagonist", "Love Interest", "Comic Relief")
+- description: 2-3 sentences about the character's story purpose and personality (50+ words total)
+- traits: Array of 3-5 specific personality/characteristic traits directly from their script behavior
+- skinColor: Realistic descriptor (e.g., "Fair", "Olive", "Deep brown", "Golden") or hex code
+- hairColor: Realistic descriptor (e.g., "Dark brown", "Blonde", "Red", "Grey") or hex code
+- clothingColor: Primary clothing color that fits their character and story context (hex or descriptor)
+- mood: Character's emotional baseline from the script (e.g., "Determined and conflicted", "Charismatic but cold")
+- visualDescription: Detailed, cinematic description of their appearance as a professional actor would look (100+ words). Include: age range, physical build, facial features, distinctive marks, typical clothing style, overall presence. Make it screen-ready for casting or AI image generation.
+- imageUrl: Always empty string ""
+
+MOOD & VISUAL CONTEXT:
+For ${genre} films, ensure characters fit the genre's visual and tonal conventions while remaining grounded in the script's specific story.
 `.trim();
   const res = await callOpenAIJsonSchema<{ characters: Character[] }>(prompt, buildCharactersSchema(), {
-    temperature: 0.35,
-    max_tokens: 2200,
+    temperature: 0.4,
+    max_tokens: 3200,
     request_tag: "characters",
     schema_name: "Characters",
     model: MODEL_JSON_RAW,
@@ -2295,11 +2315,57 @@ Rules:
 export const generateSoundAssets = async (script: string, genre: string) => {
   const words = countWords(script);
   const approxMinutes = clampInt(Math.round(words / SCRIPT_WORDS_PER_PAGE), 5, 180);
-  const numAssets = approxMinutes <= 15 ? 5 : approxMinutes <= 30 ? 8 : approxMinutes <= 60 ? 10 : approxMinutes <= 90 ? 12 : 15;
+  const numAssets = approxMinutes <= 15 ? 6 : approxMinutes <= 30 ? 9 : approxMinutes <= 60 ? 12 : approxMinutes <= 90 ? 14 : 18;
   const prompt = `
-Given this film script:
-${tail(script, 22000)}
-Generate exactly ${numAssets} sound assets for a ${genre} film.
+You are a professional film sound designer and composer. Analyze this ${genre} film script and create a COHESIVE, SCENE-SPECIFIC sound design package.
+
+SCRIPT:
+${tail(script, 25000)}
+
+SCRIPT DURATION (approx): ${approxMinutes} minutes
+
+YOUR TASK:
+1. Identify key scenes, emotional beats, and locations in the script
+2. Create ${numAssets} sound assets (music, sfx, ambient, dialogue) that support the narrative pacing and emotional arc
+3. Each asset must map to specific scenes or moments from the script
+4. Generate detailed, production-ready audio descriptions for AI music/sound generation
+5. Ensure audio design reinforces the ${genre} genre tone and story atmosphere
+
+SOUND ASSET TYPES:
+- Music: Orchestral scores, themes, underscore (emotional support for scenes)
+- SFX: Sound effects for actions, impacts, environmental sounds (highly specific)
+- Dialogue: Voice-over, narration, or specific spoken moments (only if relevant to story)
+- Ambient: Atmosphere, tone, environmental soundscape for locations
+
+CRITICAL REQUIREMENTS FOR EACH ASSET:
+- Name: Descriptive, location/emotion-based (e.g., "Warehouse Chase Theme", "Rain on Rooftop Ambient")
+- Type: One of: "music", "sfx", "dialogue", "ambient"
+- Duration: 
+  * For Music/ambient: minimum 00:30 (at least 30 seconds), ideal 1:00-3:00 for underscore
+  * For SFX: 00:05-00:15 (5-15 seconds)
+  * For Dialogue: 00:05-00:30
+- Description: HIGHLY DETAILED (150+ words minimum!) audio generation prompt including:
+  * Specific mood and emotional tone tied to the script scene
+  * Instrumentation or sound elements (be very specific)
+  * Tempo, intensity, and dynamics
+  * Reference to the narrative moment it supports
+  * For music: Key, tempo (BPM if applicable), style, instrumentation mix
+  * For SFX: Exact sound characteristics, layer details, any processing
+  * For ambient: Environmental details, frequency range, spatial characteristics
+  * Cinematic reference comparisons (e.g., "similar to the tense underscore in Sicario during...")
+- Scenes: Array of 2-5 specific scene descriptions from the script where this asset plays
+- audioUrl: Always empty string ""
+
+SOUND DESIGN PRINCIPLES:
+- Create a cohesive sonic palette suited to the ${genre} genre
+- Ensure musical themes have distinct identities and replay at key moments
+- SFX should be sharp and realistic, integrated with music smoothly
+- Ambient beds should sit underneath dialogue/music without competing
+- Build emotional resonance through audio choices that mirror story beats
+
+Example description format for audio generation:
+"An intense, pulsing electronic score with dark undertones. Driving 140 BPM with heavy bass drops and staccato synth stabs. Layers include a minor key melodic hook (reminiscent of Blade Runner 2049's score), layered synthesizers creating tension, and occasional organic string elements. The progression builds from sparse and eerie to dense and overwhelming, perfect for the climactic confrontation in the thesis scene. Duration: 2:30. This track should feel cinematic, threatening, and cinematic—the audio equivalent of a dangerous predator stalking prey."
+
 Return JSON:
 {
   "soundAssets": [
@@ -2307,27 +2373,30 @@ Return JSON:
       "name": "...",
       "type": "music|sfx|dialogue|ambient",
       "duration": "MM:SS",
-      "description": "at least 50 words, vivid and specific for AI audio generation",
-      "scenes": ["..."],
+      "description": "At least 150 words, very specific for AI audio generation",
+      "scenes": ["Specific scene from script", "Another scene location"],
       "audioUrl": ""
     }
   ]
 }
-Rules:
-- duration must be at least 00:10
-- audioUrl must be an empty string
+
+VALIDATION:
+- All durations must be at least 00:10 for music/ambient, 00:05 for SFX
+- All descriptions must be 150+ words
+- All scene references must map to actual script content
+- No generic descriptions - each must be tailored to the specific narrative moment
 `.trim();
   const res = await callOpenAIJsonSchema<{ soundAssets: any[] }>(prompt, buildSoundAssetsSchema(), {
-    temperature: 0.35,
-    max_tokens: 2600,
+    temperature: 0.45,
+    max_tokens: 4000,
     request_tag: "sound",
     schema_name: "SoundAssets",
     model: MODEL_JSON_RAW,
   });
   let soundAssets: any[] = res.data?.soundAssets || [];
-  const minDuration = approxMinutes >= 60 ? "00:30" : "00:10";
+  const minDuration = approxMinutes >= 60 ? "00:30" : "00:15";
   soundAssets = soundAssets.map((asset) => {
-    const [mins, secs] = String(asset.duration || "00:10")
+    const [mins, secs] = String(asset.duration || "00:15")
       .split(":")
       .map((n: string) => parseInt(n, 10) || 0);
     const totalSecs = (mins || 0) * 60 + (secs || 0);

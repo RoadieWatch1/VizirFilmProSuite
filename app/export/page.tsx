@@ -27,9 +27,9 @@ const exportOptions: ExportOption[] = [
   {
     id: "script",
     name: "Script Export",
-    description: "Export screenplay in industry-standard format",
-    format: "PDF",
-    size: "2-5 MB",
+    description: "Export screenplay as text file in Fountain format",
+    format: "TXT",
+    size: "0.5-2 MB",
   },
   {
     id: "storyboard",
@@ -42,15 +42,15 @@ const exportOptions: ExportOption[] = [
     id: "budget",
     name: "Budget Report",
     description: "Detailed budget breakdown and analysis",
-    format: "Excel",
-    size: "1-2 MB",
+    format: "JSON",
+    size: "0.1-1 MB",
   },
   {
     id: "schedule",
     name: "Production Schedule",
     description: "Complete shooting schedule with crew details",
-    format: "PDF",
-    size: "2-4 MB",
+    format: "JSON",
+    size: "0.1-1 MB",
   },
   {
     id: "characters",
@@ -63,15 +63,15 @@ const exportOptions: ExportOption[] = [
     id: "locations",
     name: "Location Package",
     description: "Location details with types and filming considerations",
-    format: "ZIP",
-    size: "20-50 MB",
+    format: "JSON",
+    size: "0.1-1 MB",
   },
   {
     id: "complete",
     name: "Complete Package",
     description: "Everything in one comprehensive export with all images",
     format: "ZIP",
-    size: "100-200 MB",
+    size: "20-100 MB",
   },
 ];
 

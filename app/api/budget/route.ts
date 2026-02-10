@@ -4,6 +4,7 @@ import OpenAI from "openai";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 // ✅ Helps avoid build crash + keeps consistent with your other routes:
 // - Do NOT instantiate OpenAI at module load.
@@ -30,7 +31,7 @@ function getOpenAI(): OpenAI {
 
 // ✅ Use your Vercel env vars (match what you configured)
 const MODEL_JSON =
-  process.env.OPENAI_MODEL_JSON || "gpt-4o-mini-2024-07-18"; // recommended default
+  process.env.OPENAI_MODEL_JSON || "gpt-4o-mini";
 const DEFAULT_JSON_CALL_TIMEOUT_MS = parseInt(process.env.DEFAULT_JSON_CALL_TIMEOUT_MS || "60000", 10);
 
 // ✅ Define BudgetCategory type for TypeScript
@@ -227,7 +228,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         error: error?.message || "Failed to generate budget. Please try again later.",
-        details: error?.stack || "No stack trace available",
       },
       { status: 500 }
     );

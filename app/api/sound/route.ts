@@ -1,6 +1,10 @@
 // app/api/sound/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { generateAudioAssets } from "@/lib/audioGenerators"; // Updated to use the new function
+import { generateAudioAssets } from "@/lib/audioGenerators";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const maxDuration = 300;
 
 export async function POST(request: NextRequest) {
   try {
@@ -46,7 +50,6 @@ export async function POST(request: NextRequest) {
       {
         success: false,
         error: error?.message || "Unexpected error occurred during sound generation.",
-        details: error, // 🔍 include full object for debugging
       },
       { status: 500 }
     );

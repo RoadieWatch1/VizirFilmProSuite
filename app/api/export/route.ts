@@ -4,6 +4,8 @@ import JSZip from "jszip";
 import fetch from "node-fetch";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const maxDuration = 120;
 
 export async function POST(request: NextRequest) {
   try {

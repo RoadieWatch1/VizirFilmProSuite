@@ -3,11 +3,21 @@ import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { generateCharacters } from "@/lib/generators";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const maxDuration = 120;
+
+// Build-safe lazy init (prevents Vercel build crash when env vars aren't present)
+let _openai: OpenAI | null = null;
+function getOpenAI(): OpenAI {
+  if (_openai) return _openai;
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing OPENAI_API_KEY.");
+  }
+  _openai = new OpenAI({ apiKey });
+  return _openai;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -39,6 +49,7 @@ export async function POST(request: NextRequest) {
       const imagePrompt = `Photorealistic full-body portrait of a real person portraying the character. ${visualDescription}. Cinematic style, high detail, natural colors, realistic textures and lighting. Ensure full head and body are in frame, no cropping. The image should look like a professional actor in costume, ready for film production.`;
 
       try {
+        const openai = getOpenAI();
         const dalleImage = await openai.images.generate({
           model: "dall-e-3",
           prompt: imagePrompt,

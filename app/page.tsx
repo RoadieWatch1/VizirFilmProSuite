@@ -241,7 +241,7 @@ export default function HomePage() {
         soundAssets: uploadedSoundAssets,
       });
 
-      alert("Film package generated successfully! Check other tabs for your content.");
+      setLoadingMessage("Film package generated! Navigate to other tabs to explore your content.");
     } catch (err: any) {
       console.error("Generation error:", err);
       const errorMessage = err instanceof Error ? err.message : "An unexpected error occurred.";
