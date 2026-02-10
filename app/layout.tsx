@@ -33,7 +33,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${inter.variable} ${robotoMono.variable}`}>
-      <body className="font-sans min-h-screen bg-[#021e1f] text-white">
+      <body className="font-sans min-h-screen bg-[#091416] text-[#E8ECF0] antialiased">
         <AuthProvider>
           <Navigation />
           <main className="min-h-screen">{children}</main>

@@ -265,10 +265,12 @@ async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise
 }
 
 function minPagesTargetForMinutes(minutes: number): number {
-  // For feature-length: guarantee at least 90 pages, and at least 75% of target minutes as pages.
-  if (minutes >= 100) return Math.max(90, Math.round(minutes * 0.75));
-  // For shorter scripts keep a gentle baseline.
-  return Math.max(10, Math.round(minutes * 0.85));
+  // Tighter enforcement: scripts should be at least ~88-90% of target pages
+  if (minutes >= 110) return Math.max(100, Math.round(minutes * 0.88));
+  if (minutes >= 90) return Math.max(82, Math.round(minutes * 0.9));
+  if (minutes >= 60) return Math.max(52, Math.round(minutes * 0.88));
+  if (minutes >= 30) return Math.max(25, Math.round(minutes * 0.9));
+  return Math.max(5, Math.round(minutes * 0.85));
 }
 
 async function generateScriptData(movieIdea: string, movieGenre: string, scriptLength: string, requestId: string) {
@@ -332,7 +334,7 @@ async function generateScriptData(movieIdea: string, movieGenre: string, scriptL
   const estPages = estimatePagesByWords(scriptText);
   const sceneCount = countScenes(scriptText);
   const minPages = minPagesTargetForMinutes(minutes);
-  const tooShort = minutes >= 100 && estPages < minPages;
+  const tooShort = minutes > 15 && estPages < minPages;
 
   console.log(`[${requestId}] Script stats:`, {
     words,
@@ -562,35 +564,31 @@ export async function POST(request: NextRequest) {
           "generateStoryboard"
         );
 
+        const mapShot = (shot: any) => ({
+          scene: shot.scene || "",
+          shotNumber: shot.shotNumber || "",
+          description: shot.description || "",
+          shotSize: shot.shotSize || "",
+          cameraAngle: shot.cameraAngle || "",
+          cameraMovement: shot.cameraMovement || "",
+          lens: shot.lens || "",
+          lighting: shot.lighting || "",
+          composition: shot.composition || "",
+          duration: shot.duration || "",
+          dialogue: shot.dialogue || "",
+          soundEffects: shot.soundEffects || "",
+          actionNotes: shot.actionNotes || "",
+          transition: shot.transition || "",
+          notes: shot.notes || "",
+          imagePrompt: shot.imagePrompt || "",
+          imageUrl: shot.imageUrl || "",
+        });
+
         return NextResponse.json({
           requestId,
           storyboard: (frames || []).map((frame) => ({
-            scene: frame.scene,
-            shotNumber: frame.shotNumber,
-            description: frame.description,
-            cameraAngle: frame.cameraAngle || "",
-            cameraMovement: frame.cameraMovement || "",
-            lens: frame.lens || "",
-            lighting: frame.lighting || "",
-            duration: frame.duration || "",
-            dialogue: frame.dialogue || "",
-            soundEffects: frame.soundEffects || "",
-            notes: frame.notes || "",
-            imageUrl: frame.imageUrl || "",
-            coverageShots: (frame.coverageShots || []).map((shot) => ({
-              scene: shot.scene,
-              shotNumber: shot.shotNumber,
-              description: shot.description,
-              cameraAngle: shot.cameraAngle || "",
-              cameraMovement: shot.cameraMovement || "",
-              lens: shot.lens || "",
-              lighting: shot.lighting || "",
-              duration: shot.duration || "",
-              dialogue: shot.dialogue || "",
-              soundEffects: shot.soundEffects || "",
-              notes: shot.notes || "",
-              imageUrl: shot.imageUrl || "",
-            })),
+            ...mapShot(frame),
+            coverageShots: (frame.coverageShots || []).map(mapShot),
           })),
           meta: { step, ms: Date.now() - startedAt },
         });

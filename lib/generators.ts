@@ -635,13 +635,17 @@ export interface StoryboardFrame {
   scene: string;
   shotNumber: string;
   description: string;
-  cameraAngle?: string;
-  cameraMovement?: string;
-  lens?: string;
-  lighting?: string;
-  duration?: string;
+  shotSize?: string;        // e.g. "ECU", "CU", "MCU", "MS", "MLS", "LS", "ELS", "OS", "POV", "2-Shot"
+  cameraAngle?: string;     // e.g. "Eye Level", "Low Angle", "High Angle", "Dutch Angle", "Bird's Eye", "Worm's Eye"
+  cameraMovement?: string;  // e.g. "Static", "Pan L→R", "Tilt Up", "Dolly In", "Tracking", "Crane Up", "Handheld", "Steadicam"
+  lens?: string;            // e.g. "24mm Wide", "50mm Standard", "85mm Portrait", "135mm Telephoto"
+  lighting?: string;        // e.g. "Key + Fill (Rembrandt)", "Silhouette", "Practical Only", "High Key", "Low Key"
+  composition?: string;     // e.g. "Rule of Thirds — subject right", "Center Frame", "Leading Lines", "Frame within Frame"
+  duration?: string;        // e.g. "3s", "5s"
   dialogue?: string;
   soundEffects?: string;
+  actionNotes?: string;     // blocking & action choreography
+  transition?: string;      // e.g. "CUT TO:", "DISSOLVE TO:", "SMASH CUT:", "MATCH CUT:"
   notes?: string;
   imagePrompt?: string;
   imageUrl?: string;
@@ -880,46 +884,55 @@ function buildCharactersSchema() {
   };
 }
 function buildStoryboardSchema() {
-  const shotSchema = {
+  const coverageShotSchema = {
     type: "object",
     additionalProperties: false,
-    required: ["scene", "shotNumber", "description", "imagePrompt", "imageUrl"],
+    required: ["scene", "shotNumber", "description", "shotSize", "cameraAngle", "imagePrompt", "imageUrl"],
     properties: {
       scene: { type: "string" },
       shotNumber: { type: "string" },
       description: { type: "string" },
+      shotSize: { type: "string" },
       cameraAngle: { type: "string" },
       cameraMovement: { type: "string" },
       lens: { type: "string" },
       lighting: { type: "string" },
+      composition: { type: "string" },
       duration: { type: "string" },
       dialogue: { type: "string" },
       soundEffects: { type: "string" },
+      actionNotes: { type: "string" },
+      transition: { type: "string" },
+      notes: { type: "string" },
+      imagePrompt: { type: "string" },
+      imageUrl: { type: "string" },
+    },
+  };
+  const mainShotSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["scene", "shotNumber", "description", "shotSize", "cameraAngle", "lens", "lighting", "composition", "imagePrompt", "imageUrl"],
+    properties: {
+      scene: { type: "string" },
+      shotNumber: { type: "string" },
+      description: { type: "string" },
+      shotSize: { type: "string" },
+      cameraAngle: { type: "string" },
+      cameraMovement: { type: "string" },
+      lens: { type: "string" },
+      lighting: { type: "string" },
+      composition: { type: "string" },
+      duration: { type: "string" },
+      dialogue: { type: "string" },
+      soundEffects: { type: "string" },
+      actionNotes: { type: "string" },
+      transition: { type: "string" },
       notes: { type: "string" },
       imagePrompt: { type: "string" },
       imageUrl: { type: "string" },
       coverageShots: {
         type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          required: ["scene", "shotNumber", "description", "imagePrompt", "imageUrl"],
-          properties: {
-            scene: { type: "string" },
-            shotNumber: { type: "string" },
-            description: { type: "string" },
-            cameraAngle: { type: "string" },
-            cameraMovement: { type: "string" },
-            lens: { type: "string" },
-            lighting: { type: "string" },
-            duration: { type: "string" },
-            dialogue: { type: "string" },
-            soundEffects: { type: "string" },
-            notes: { type: "string" },
-            imagePrompt: { type: "string" },
-            imageUrl: { type: "string" },
-          },
-        },
+        items: coverageShotSchema,
         minItems: 0,
         maxItems: 6,
       },
@@ -934,7 +947,7 @@ function buildStoryboardSchema() {
         type: "array",
         minItems: 1,
         maxItems: 200,
-        items: shotSchema,
+        items: mainShotSchema,
       },
     },
   };
@@ -1619,22 +1632,28 @@ export const generateScript = async (idea: string, genre: string, length: string
     numActs = 3;
     numCharacters = 3;
     synopsisLength = "200 words";
-  } else if (duration <= 60) {
+  } else if (duration <= 45) {
     structureGuide = "A featurette. Streamlined plot, limited locations, focus on one main conflict.";
     numActs = 3;
     numCharacters = 5;
     synopsisLength = "350 words";
-  } else if (duration <= 90) {
+  } else if (duration <= 75) {
     structureGuide =
-      "A standard feature film (75-90 pages). Tight pacing, no filler scenes, strong three-act structure with subplots and character arcs.";
+      "A feature film (45-75 pages). Strong three-act structure with subplots, character arcs, and escalating conflict. No filler scenes.";
     numActs = 3;
     numCharacters = 6;
     synopsisLength = "500 words";
-  } else {
-    structureGuide = "An epic feature (100+ pages). Complex subplots, ensemble cast, extended character development.";
+  } else if (duration <= 100) {
+    structureGuide =
+      "A standard feature film (75-100 pages). Tight pacing, no filler scenes, strong three-act structure with rich subplots, character arcs, and a satisfying resolution.";
     numActs = 3;
     numCharacters = 7;
-    synopsisLength = "600 words";
+    synopsisLength = "500 words";
+  } else {
+    structureGuide = "An epic feature (100+ pages). Complex subplots, ensemble cast, extended character development, multiple story threads weaving together toward a powerful climax.";
+    numActs = 3;
+    numCharacters = 8;
+    synopsisLength = "700 words";
   }
   const basePrompt = `
 Generate a professional screenplay for a ${genre} film based on this idea:
@@ -1693,9 +1712,11 @@ Enforcement:
 === META ===
 ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, themes: meta.themes }, null, 2)}
 `.trim();
+    // Scale token budget: 1-5 min needs ~6k, 10-15 min needs up to ~10k
+    const shortMaxTokens = duration <= 5 ? 6000 : duration <= 10 ? 8000 : 10000;
     const { content: scriptText } = await callOpenAIText(writePrompt, {
       temperature: 1,
-      max_tokens: 6000,
+      max_tokens: shortMaxTokens,
       model: MODEL_TEXT_RAW,
       request_tag: "short-script",
     });
@@ -1718,11 +1739,12 @@ ${JSON.stringify({ idea, genre, logline: meta.logline, synopsis: meta.synopsis, 
   const shortScript: ShortScriptItem[] = outlineParsed.shortScript || [];
   const effectiveScenes = Math.max(1, shortScript.length || approxScenes);
   const chunkCount =
+    targetPages <= 30 ? 3 :
     targetPages <= 45 ? 4 :
     targetPages <= 70 ? 6 :
-    targetPages <= 95 ? 8 :
-    targetPages <= 120 ? 9 :
-    10;
+    targetPages <= 90 ? 8 :
+    targetPages <= 110 ? 10 :
+    12;
   const safeChunkCount = Math.min(chunkCount, effectiveScenes);
   const pagesPerChunk = Math.ceil(targetPages / safeChunkCount);
   // Calibrated words-per-page math
@@ -1968,11 +1990,12 @@ MUST AVOID: ${(plan.mustAvoid || []).join(", ")}\n\n` : ""}${chunk.beats}
       wordsPerPage: SCRIPT_WORDS_PER_PAGE,
     });
   }
-  // ✅ Final “top-off” if still too short
+  // ✅ Final "top-off" if still too short — tighter enforcement
   const minFinalPagesWanted =
-    targetPages >= 110 ? 95 :
-    targetPages >= 90 ? 80 :
-    Math.max(1, Math.round(targetPages * 0.85));
+    targetPages >= 110 ? Math.max(100, Math.round(targetPages * 0.88)) :
+    targetPages >= 90 ? Math.max(82, Math.round(targetPages * 0.9)) :
+    targetPages >= 60 ? Math.max(52, Math.round(targetPages * 0.88)) :
+    Math.max(1, Math.round(targetPages * 0.9));
   let finalWords = w0;
   let finalPages = p0;
   if (finalPages < minFinalPagesWanted) {
@@ -2088,39 +2111,87 @@ export const generateStoryboard = async ({
   const duration = parseLengthToMinutes(scriptLength);
   const numFrames = duration <= 5 ? 8 : duration <= 15 ? 15 : duration <= 30 ? 25 : duration <= 60 ? 40 : 80;
   const coveragePerFrame = duration > 15 ? 3 : 2;
+  // Scale token budget with frame count
+  const storyboardMaxTokens = clamp(Math.round(numFrames * 120), 4500, 12000);
+  const charSummary = characters.slice(0, 10).map(c =>
+    `${c.name} (${c.role}): ${c.visualDescription || c.description || ""}`.slice(0, 200)
+  ).join("\n");
   const prompt = `
-Generate a detailed storyboard for this ${movieGenre} film idea: ${movieIdea}
-Full Script (trimmed):
+You are a professional storyboard artist and cinematographer. Generate a shot-by-shot storyboard for this ${movieGenre} film.
+
+FILM IDEA: ${movieIdea}
+
+SCRIPT (trimmed):
 ${tail(script, 18000)}
-Characters:
-${JSON.stringify(characters).slice(0, 12000)}
-Specifications:
-- Target about ${numFrames} main frames (we will normalize if needed)
-- Each main frame should include ~${coveragePerFrame} coverage shots
-- For each frame/shot include:
-  scene, shotNumber, description, cameraAngle, cameraMovement, lens, lighting, duration, dialogue, soundEffects, notes, imagePrompt, imageUrl (empty)
-- Always fill imagePrompt. Leave imageUrl empty.
-Return JSON with key "storyboard" containing array of main frames, each optionally having coverageShots array.
+
+KEY CHARACTERS:
+${charSummary}
+
+REQUIREMENTS — GENERATE EXACTLY ${numFrames} MAIN FRAMES:
+
+For EACH main frame, fill in ALL of these fields with real professional terminology:
+- scene: The scene heading (e.g. "INT. WAREHOUSE - NIGHT")
+- shotNumber: Sequential shot ID (e.g. "1A", "1B", "2A")
+- description: What is visually happening in the frame (2-3 sentences, vivid and specific)
+- shotSize: One of: ECU (Extreme Close-Up), CU (Close-Up), MCU (Medium Close-Up), MS (Medium Shot), MLS (Medium Long Shot), LS (Long Shot), ELS (Extreme Long Shot), OS (Over-the-Shoulder), POV (Point of View), 2-Shot, Insert
+- cameraAngle: One of: Eye Level, Low Angle, High Angle, Dutch/Tilted, Bird's Eye, Worm's Eye, Overhead
+- cameraMovement: One of: Static, Pan Left, Pan Right, Tilt Up, Tilt Down, Dolly In, Dolly Out, Tracking Left, Tracking Right, Crane Up, Crane Down, Handheld, Steadicam, Zoom In, Zoom Out, Whip Pan, Arc
+- lens: Specific focal length with purpose (e.g. "24mm Wide — establishing space", "85mm — intimate portrait", "135mm Telephoto — compression")
+- lighting: Specific setup (e.g. "Low key — single hard source from camera left", "Rembrandt — key right, fill left at 2:1 ratio", "Silhouette — strong backlight only", "Practical — desk lamp and window")
+- composition: Describe framing rule (e.g. "Rule of thirds — subject left third, negative space right", "Center frame — symmetrical", "Leading lines — hallway converging to subject", "Frame within frame — doorway")
+- duration: Shot duration in seconds (e.g. "3s", "5s", "8s")
+- dialogue: Any dialogue spoken during this shot (or empty string)
+- soundEffects: Key sound design elements (or empty string)
+- actionNotes: Blocking and choreography details — where actors move, what they do with their hands/body (or empty string)
+- transition: How this shot transitions to the next (e.g. "CUT TO:", "DISSOLVE TO:", "SMASH CUT:", "MATCH CUT:", "J-CUT:", "L-CUT:") — last frame can be "FADE TO BLACK."
+- notes: Director notes — emotional tone, pacing intent, visual references (or empty string)
+- imagePrompt: A DETAILED visual description for generating a BLACK AND WHITE PENCIL SKETCH storyboard panel. MUST start with: "Black and white pencil sketch storyboard panel, hand-drawn style, clean line art." Then describe: the exact composition, character positions, environment details, lighting direction with hatching/cross-hatching, perspective, and mood. Be specific about what is visible in the frame. Do NOT mention color. Always describe it as if drawn on paper.
+- imageUrl: Always empty string ""
+
+Each main frame should include ~${coveragePerFrame} coverage shots in the "coverageShots" array, with the same field structure (these are alternate angles/sizes for editing coverage).
+
+SHOT VARIETY RULES:
+- Vary shot sizes: mix ECU, CU, MS, LS throughout — don't repeat the same size 3+ times in a row
+- Use establishing shots (ELS/LS) at the start of each new scene/location
+- Use close-ups for emotional beats and dialogue emphasis
+- Use medium shots for two-person dialogue and blocking
+- Use movement shots (dolly, tracking) for dynamic moments
+- Every scene should have at least one wide and one close shot
+
+Return JSON with key "storyboard" containing the array of main frames.
 `.trim();
   const res = await callOpenAIJsonSchema<{ storyboard: StoryboardFrame[] }>(prompt, buildStoryboardSchema(), {
     temperature: 0.4,
-    max_tokens: 4500,
+    max_tokens: storyboardMaxTokens,
     request_tag: "storyboard",
     schema_name: "Storyboard",
     model: MODEL_JSON_RAW,
   });
   let frames = res.data?.storyboard || [];
   frames = Array.isArray(frames) ? frames : [];
+  const BW_PREFIX = "Black and white pencil sketch storyboard panel, hand-drawn style, clean line art.";
   frames = frames.map((f, idx) => ({
     ...f,
-    shotNumber: String(f.shotNumber || `${idx + 1}`),
-    imagePrompt: String(f.imagePrompt || f.description || "Cinematic storyboard frame."),
+    shotNumber: String(f.shotNumber || `${idx + 1}A`),
+    shotSize: String(f.shotSize || "MS"),
+    cameraAngle: String(f.cameraAngle || "Eye Level"),
+    lens: String(f.lens || "50mm Standard"),
+    lighting: String(f.lighting || "Natural"),
+    composition: String(f.composition || "Center frame"),
+    transition: String(f.transition || "CUT TO:"),
+    imagePrompt: String(f.imagePrompt || "").startsWith("Black and white")
+      ? String(f.imagePrompt)
+      : `${BW_PREFIX} ${String(f.imagePrompt || f.description || "A cinematic storyboard frame.")}`,
     imageUrl: "",
     coverageShots: Array.isArray(f.coverageShots)
       ? f.coverageShots.map((c, j) => ({
           ...c,
-          shotNumber: String(c.shotNumber || `${idx + 1}.${j + 1}`),
-          imagePrompt: String(c.imagePrompt || c.description || "Coverage storyboard shot."),
+          shotNumber: String(c.shotNumber || `${idx + 1}${String.fromCharCode(66 + j)}`),
+          shotSize: String(c.shotSize || "MS"),
+          cameraAngle: String(c.cameraAngle || "Eye Level"),
+          imagePrompt: String(c.imagePrompt || "").startsWith("Black and white")
+            ? String(c.imagePrompt)
+            : `${BW_PREFIX} ${String(c.imagePrompt || c.description || "Coverage storyboard shot.")}`,
           imageUrl: "",
         }))
       : [],
@@ -2268,7 +2339,7 @@ Rules:
 export const generateSoundAssets = async (script: string, genre: string) => {
   const words = countWords(script);
   const approxMinutes = clampInt(Math.round(words / SCRIPT_WORDS_PER_PAGE), 5, 180);
-  const numAssets = approxMinutes <= 15 ? 5 : approxMinutes <= 60 ? 8 : 15;
+  const numAssets = approxMinutes <= 15 ? 5 : approxMinutes <= 30 ? 8 : approxMinutes <= 60 ? 10 : approxMinutes <= 90 ? 12 : 15;
   const prompt = `
 Given this film script:
 ${tail(script, 22000)}

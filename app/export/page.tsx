@@ -89,8 +89,8 @@ export default function ExportPage() {
     );
   };
 
-  const handleExport = async () => {
-    if (selectedOptions.length === 0) {
+  const runExport = async (options: string[]) => {
+    if (options.length === 0) {
       alert("Please select at least one export option.");
       return;
     }
@@ -109,7 +109,7 @@ export default function ExportPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          selectedOptions,
+          selectedOptions: options,
           filmPackage,
         }),
       });
@@ -136,6 +136,15 @@ export default function ExportPage() {
     } finally {
       setIsExporting(false);
     }
+  };
+
+  const handleExport = async () => {
+    await runExport(selectedOptions);
+  };
+
+  const handleQuickExport = async (optionId: string) => {
+    setSelectedOptions([optionId]);
+    await runExport([optionId]);
   };
 
   // Estimate total size
@@ -294,33 +303,27 @@ export default function ExportPage() {
                 <div className="space-y-3">
                   <Button
                     variant="outline"
+                    disabled={isExporting}
                     className="w-full justify-start border-[#FF6A00]/20 text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white"
-                    onClick={() => {
-                      setSelectedOptions(["script"]);
-                      handleExport();
-                    }}
+                    onClick={() => handleQuickExport("script")}
                   >
                     <FileText className="w-4 h-4 mr-2" />
                     Script PDF
                   </Button>
                   <Button
                     variant="outline"
+                    disabled={isExporting}
                     className="w-full justify-start border-[#FF6A00]/20 text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white"
-                    onClick={() => {
-                      setSelectedOptions(["storyboard"]);
-                      handleExport();
-                    }}
+                    onClick={() => handleQuickExport("storyboard")}
                   >
                     <Film className="w-4 h-4 mr-2" />
                     Storyboard
                   </Button>
                   <Button
                     variant="outline"
+                    disabled={isExporting}
                     className="w-full justify-start border-[#FF6A00]/20 text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white"
-                    onClick={() => {
-                      setSelectedOptions(["complete"]);
-                      handleExport();
-                    }}
+                    onClick={() => handleQuickExport("complete")}
                   >
                     <Package className="w-4 h-4 mr-2" />
                     Complete Package

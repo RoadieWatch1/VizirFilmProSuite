@@ -41,7 +41,7 @@ export default function ScriptPage() {
   const parseDurationToMinutes = (raw?: string): number => {
     if (!raw) return 5;
     const s = String(raw).trim().toLowerCase();
-    if (s.includes("feature")) return 100;
+    if (s.includes("feature")) return 120;
     if (s.includes("short")) return 10;
 
     const hr = s.match(/(\d+)\s*(h|hr|hour|hours)\b/);
