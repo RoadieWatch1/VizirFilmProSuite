@@ -28,10 +28,10 @@ export async function POST(request: NextRequest) {
 
       const openai = getOpenAI();
 
-      // Enforce B&W pencil sketch style in the prompt
-      const BW_PREFIX = "Black and white pencil sketch storyboard panel, hand-drawn style, clean line art on white paper.";
-      const BW_SUFFIX = "No color. Graphite pencil only. Professional storyboard art style with hatching for shadows. 16:9 widescreen aspect ratio composition.";
-      const safePrompt = imagePrompt.startsWith("Black and white")
+      // Enforce cinematic hand-drawn storyboard style
+      const BW_PREFIX = "Cinematic hand-drawn storyboard sketch, black and white pencil style, professional film storyboard, dramatic lighting, realistic proportions, strong composition,";
+      const BW_SUFFIX = "Detailed line work, moody atmosphere, film pre-production storyboard, visible pencil strokes and cross-hatching for shadows, charcoal and ink sketch texture, not photorealistic, no color, no text, no captions, no UI elements.";
+      const safePrompt = imagePrompt.startsWith("Cinematic hand-drawn")
         ? `${imagePrompt} ${BW_SUFFIX}`
         : `${BW_PREFIX} ${imagePrompt} ${BW_SUFFIX}`;
 

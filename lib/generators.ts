@@ -2137,7 +2137,7 @@ For EACH main frame, provide these fields:
 - actionNotes: Blocking/choreography (or "")
 - transition: CUT TO:, DISSOLVE TO:, SMASH CUT:, MATCH CUT:, etc. Last frame: "FADE TO BLACK."
 - notes: Director notes (or "")
-- imagePrompt: MUST start with "Black and white pencil sketch storyboard panel, hand-drawn style, clean line art." Then describe composition, characters, environment, lighting with hatching, perspective, mood. No color.
+- imagePrompt: MUST start with "Cinematic hand-drawn storyboard sketch, black and white pencil style, professional film storyboard, dramatic lighting, realistic proportions, strong composition," then include the specific shot type (wide establishing shot / medium action shot / close-up cinematic shot), then describe the scene with characters, environment, perspective, mood, silhouettes. Must include: "detailed line work, moody atmosphere, film pre-production storyboard, not photorealistic, no color, no text"
 - imageUrl: Always ""
 
 SHOT VARIETY:
@@ -2156,22 +2156,88 @@ Return JSON: { "storyboard": [ ... ] }
   });
   let frames = res.data?.storyboard || [];
   frames = Array.isArray(frames) ? frames : [];
-  const BW_PREFIX = "Black and white pencil sketch storyboard panel, hand-drawn style, clean line art.";
-  frames = frames.map((f, idx) => ({
-    ...f,
-    shotNumber: String(f.shotNumber || `${idx + 1}A`),
-    shotSize: String(f.shotSize || "MS"),
-    cameraAngle: String(f.cameraAngle || "Eye Level"),
-    lens: String(f.lens || "50mm Standard"),
-    lighting: String(f.lighting || "Natural"),
-    composition: String(f.composition || "Center frame"),
-    transition: String(f.transition || "CUT TO:"),
-    imagePrompt: String(f.imagePrompt || "").startsWith("Black and white")
+  const PROMPT_PREFIX = "Cinematic hand-drawn storyboard sketch, black and white pencil style, professional film storyboard, dramatic lighting, realistic proportions, strong composition,";
+  const PROMPT_SUFFIX = "detailed line work, moody atmosphere, film pre-production storyboard, not photorealistic, no color, no text";
+  frames = frames.map((f, idx) => {
+    const sceneDesc = String(f.description || "A cinematic scene.");
+    const sceneHeading = String(f.scene || "");
+    const basePrompt = String(f.imagePrompt || "").startsWith("Cinematic hand-drawn")
       ? String(f.imagePrompt)
-      : `${BW_PREFIX} ${String(f.imagePrompt || f.description || "A cinematic storyboard frame.")}`,
-    imageUrl: "",
-    coverageShots: [],
-  }));
+      : `${PROMPT_PREFIX} ${String(f.imagePrompt || sceneDesc)}, ${PROMPT_SUFFIX}`;
+    // Generate 3 coverage shots per frame: wide, medium, close-up
+    const coverageShots: StoryboardFrame[] = [
+      {
+        scene: sceneHeading,
+        shotNumber: `${f.shotNumber || idx + 1}-W`,
+        description: `Wide establishing shot: ${sceneDesc}`,
+        shotSize: "ELS",
+        cameraAngle: "Eye Level",
+        cameraMovement: String(f.cameraMovement || "Static"),
+        lens: "24mm Wide",
+        lighting: String(f.lighting || "Natural"),
+        composition: "Full environment visible, characters placed for scale",
+        duration: String(f.duration || "3s"),
+        dialogue: "",
+        soundEffects: String(f.soundEffects || ""),
+        actionNotes: "Establishing shot — sets mood, location, and scale",
+        transition: "CUT TO:",
+        notes: "",
+        imagePrompt: `${PROMPT_PREFIX} wide establishing shot, ${sceneDesc} Full environment visible with character placement for scale. Strong depth and perspective, ${PROMPT_SUFFIX}`,
+        imageUrl: "",
+      },
+      {
+        scene: sceneHeading,
+        shotNumber: `${f.shotNumber || idx + 1}-M`,
+        description: `Medium action shot: ${sceneDesc}`,
+        shotSize: "MS",
+        cameraAngle: String(f.cameraAngle || "Eye Level"),
+        cameraMovement: String(f.cameraMovement || "Static"),
+        lens: "50mm Standard",
+        lighting: String(f.lighting || "Natural"),
+        composition: "Character movement and interaction emphasized",
+        duration: String(f.duration || "3s"),
+        dialogue: String(f.dialogue || ""),
+        soundEffects: String(f.soundEffects || ""),
+        actionNotes: "Action shot — focuses on character movement and body language",
+        transition: "CUT TO:",
+        notes: "",
+        imagePrompt: `${PROMPT_PREFIX} medium action shot, ${sceneDesc} Strong body language and cinematic framing, character interaction visible, ${PROMPT_SUFFIX}`,
+        imageUrl: "",
+      },
+      {
+        scene: sceneHeading,
+        shotNumber: `${f.shotNumber || idx + 1}-C`,
+        description: `Close-up cinematic shot: ${sceneDesc}`,
+        shotSize: "CU",
+        cameraAngle: String(f.cameraAngle || "Eye Level"),
+        cameraMovement: "Static",
+        lens: "85mm Portrait",
+        lighting: String(f.lighting || "Low Key"),
+        composition: "Tight framing on face or key detail, dramatic lighting",
+        duration: String(f.duration || "2s"),
+        dialogue: String(f.dialogue || ""),
+        soundEffects: "",
+        actionNotes: "Close-up — emphasizes emotion, tension, or key story beat",
+        transition: String(f.transition || "CUT TO:"),
+        notes: "",
+        imagePrompt: `${PROMPT_PREFIX} close-up cinematic shot, ${sceneDesc} Dramatic lighting and facial expression or key detail emphasized, shallow depth of field feel, ${PROMPT_SUFFIX}`,
+        imageUrl: "",
+      },
+    ];
+    return {
+      ...f,
+      shotNumber: String(f.shotNumber || `${idx + 1}A`),
+      shotSize: String(f.shotSize || "MS"),
+      cameraAngle: String(f.cameraAngle || "Eye Level"),
+      lens: String(f.lens || "50mm Standard"),
+      lighting: String(f.lighting || "Natural"),
+      composition: String(f.composition || "Center frame"),
+      transition: String(f.transition || "CUT TO:"),
+      imagePrompt: basePrompt,
+      imageUrl: "",
+      coverageShots,
+    };
+  });
   return frames;
 };
 // ---------- Concept ----------

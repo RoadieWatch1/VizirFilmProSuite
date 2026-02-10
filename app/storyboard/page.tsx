@@ -137,6 +137,9 @@ export default function StoryboardPage() {
     }
   };
 
+  // Track generating state for coverage shots: "frameIdx-shotIdx"
+  const [generatingCoverage, setGeneratingCoverage] = useState<Set<string>>(new Set());
+
   const handleGenerateImage = async (frameIdx: number) => {
     const frame = storyboard[frameIdx];
     if (!frame?.imagePrompt) return;
@@ -170,6 +173,48 @@ export default function StoryboardPage() {
       setGeneratingImages((prev) => {
         const next = new Set(prev);
         next.delete(frameIdx);
+        return next;
+      });
+    }
+  };
+
+  const handleGenerateCoverageImage = async (frameIdx: number, shotIdx: number) => {
+    const frame = storyboard[frameIdx];
+    const shot = frame?.coverageShots?.[shotIdx];
+    if (!shot?.imagePrompt) return;
+    const key = `${frameIdx}-${shotIdx}`;
+    setGeneratingCoverage((prev) => new Set(prev).add(key));
+    try {
+      const res = await fetch("/api/storyboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          step: "generate-frame-image",
+          imagePrompt: shot.imagePrompt,
+          shotNumber: shot.shotNumber,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        alert(err.error || "Failed to generate coverage image.");
+        return;
+      }
+      const data = await res.json();
+      if (data.imageUrl) {
+        const updated = [...storyboard];
+        const updatedCoverage = [...(updated[frameIdx].coverageShots || [])];
+        updatedCoverage[shotIdx] = { ...updatedCoverage[shotIdx], imageUrl: data.imageUrl };
+        updated[frameIdx] = { ...updated[frameIdx], coverageShots: updatedCoverage };
+        setStoryboard(updated);
+        updateFilmPackage({ storyboard: updated });
+      }
+    } catch (error) {
+      console.error("Coverage image generation error:", error);
+      alert("Failed to generate coverage image.");
+    } finally {
+      setGeneratingCoverage((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
         return next;
       });
     }
@@ -267,7 +312,7 @@ export default function StoryboardPage() {
             </Card>
             <Card className="glass-effect border-[#FF6A00]/20 p-3 text-center">
               <div className="text-xl font-bold text-[#FF6A00]">
-                {storyboard.filter((f) => f.imageUrl).length}/{storyboard.length}
+                {storyboard.filter((f) => f.imageUrl).length + storyboard.reduce((sum, f) => sum + (f.coverageShots?.filter(s => s.imageUrl).length || 0), 0)}/{storyboard.length + totalCoverage}
               </div>
               <div className="text-xs text-[#B2C8C9]">Images Generated</div>
             </Card>
@@ -440,51 +485,73 @@ export default function StoryboardPage() {
                             </div>
                           )}
 
-                          {/* Coverage Shots */}
+                          {/* Coverage Shots — 3 camera angles per scene */}
                           {frame.coverageShots && frame.coverageShots.length > 0 && (
                             <div className="mt-3">
                               <h4 className="text-[#FF6A00] font-semibold text-xs mb-2 uppercase tracking-wide">
-                                Coverage Shots
+                                Camera Angles ({frame.coverageShots.length} shots)
                               </h4>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                                {frame.coverageShots.map((shot, shotIdx) => (
-                                  <div
-                                    key={shotIdx}
-                                    className="border border-[#FF6A00]/20 rounded bg-[#0a1a1b] overflow-hidden"
-                                  >
-                                    {shot.imageUrl ? (
-                                      <img
-                                        src={shot.imageUrl}
-                                        alt={shot.scene}
-                                        className="w-full h-auto object-cover aspect-video"
-                                      />
-                                    ) : (
-                                      <div className="aspect-video bg-[#071414] flex items-center justify-center">
-                                        <Camera className="w-6 h-6 text-[#2a3d3e]" />
-                                      </div>
-                                    )}
-                                    <div className="p-2 space-y-0.5">
-                                      <div className="flex items-center justify-between">
-                                        <span className="text-[10px] font-mono text-white">
-                                          #{shot.shotNumber}
-                                        </span>
-                                        {shot.shotSize && (
-                                          <Badge className={`text-[9px] px-1 py-0 font-mono ${shotSizeColor(shot.shotSize)}`}>
-                                            {shot.shotSize}
-                                          </Badge>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                {frame.coverageShots.map((shot, shotIdx) => {
+                                  const coverageKey = `${index}-${shotIdx}`;
+                                  const isGenerating = generatingCoverage.has(coverageKey);
+                                  return (
+                                    <div
+                                      key={shotIdx}
+                                      className="border border-[#FF6A00]/20 rounded bg-[#0a1a1b] overflow-hidden"
+                                    >
+                                      {shot.imageUrl ? (
+                                        <img
+                                          src={shot.imageUrl}
+                                          alt={`${shot.shotNumber} - ${shot.shotSize}`}
+                                          className="w-full h-auto object-cover aspect-video"
+                                        />
+                                      ) : (
+                                        <div className="aspect-video bg-[#071414] flex flex-col items-center justify-center gap-2">
+                                          <Camera className="w-6 h-6 text-[#2a3d3e]" />
+                                          <Button
+                                            size="sm"
+                                            onClick={() => handleGenerateCoverageImage(index, shotIdx)}
+                                            disabled={isGenerating || !shot.imagePrompt}
+                                            className="bg-[#FF6A00] hover:bg-[#E55A00] text-white text-[10px] px-2 py-1 h-auto"
+                                          >
+                                            {isGenerating ? (
+                                              <>
+                                                <Loader2 className="w-2.5 h-2.5 mr-1 animate-spin" />
+                                                Sketching...
+                                              </>
+                                            ) : (
+                                              <>
+                                                <Pencil className="w-2.5 h-2.5 mr-1" />
+                                                Generate Sketch
+                                              </>
+                                            )}
+                                          </Button>
+                                        </div>
+                                      )}
+                                      <div className="p-2 space-y-0.5">
+                                        <div className="flex items-center justify-between">
+                                          <span className="text-[10px] font-mono text-white">
+                                            #{shot.shotNumber}
+                                          </span>
+                                          {shot.shotSize && (
+                                            <Badge className={`text-[9px] px-1 py-0 font-mono ${shotSizeColor(shot.shotSize)}`}>
+                                              {shot.shotSize}
+                                            </Badge>
+                                          )}
+                                        </div>
+                                        <p className="text-[10px] text-[#B2C8C9] line-clamp-2">
+                                          {shot.description}
+                                        </p>
+                                        {shot.lens && (
+                                          <p className="text-[9px] text-[#8da3a4]">
+                                            {shot.lens} {shot.cameraAngle ? `/ ${shot.cameraAngle}` : ""}
+                                          </p>
                                         )}
                                       </div>
-                                      <p className="text-[10px] text-[#B2C8C9] line-clamp-2">
-                                        {shot.description}
-                                      </p>
-                                      {shot.cameraAngle && (
-                                        <p className="text-[9px] text-[#8da3a4]">
-                                          {shot.cameraAngle} {shot.cameraMovement ? `/ ${shot.cameraMovement}` : ""}
-                                        </p>
-                                      )}
                                     </div>
-                                  </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                             </div>
                           )}
