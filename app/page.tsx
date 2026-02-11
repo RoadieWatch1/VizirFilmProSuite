@@ -5,7 +5,8 @@ import LoginModal from "@/components/LoginModal";
 import { useState, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import { Film, ChevronDown, Loader2, Sparkles, Crown } from "lucide-react";
+import Image from "next/image";
+import { ChevronDown, Loader2, Sparkles, Crown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -278,8 +279,15 @@ export default function HomePage() {
         <div className={cn("max-w-4xl mx-auto")}>
           {/* Header */}
           <div className={cn("text-center mb-12")}>
-            <div className={cn("flex items-center justify-center space-x-3 mb-4")}>
-              <Film className={cn("w-10 h-10 text-[#FF6A00]")} />
+            <div className={cn("flex flex-col items-center mb-6")}>
+              <Image
+                src="/images/vizir_logo/vizir_logo.png"
+                alt="Vizir Film Pro Suite"
+                width={280}
+                height={80}
+                className={cn("mb-4")}
+                priority
+              />
               <h1 className={cn("text-4xl font-bold text-white")}>Vizir Film Pro Suite</h1>
             </div>
             <p className={cn("text-xl text-[#B2C8C9] max-w-2xl mx-auto")}>

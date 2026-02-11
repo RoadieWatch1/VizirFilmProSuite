@@ -24,6 +24,25 @@ export const metadata: Metadata = {
   title: 'Vizir Film Pro - AI-Powered Film Production Suite',
   description:
     'Complete film production toolkit with AI-powered script generation, storyboarding, budgeting, and more.',
+  icons: {
+    icon: '/app/icon.jpg',
+    shortcut: '/app/icon.jpg',
+    apple: '/app/icon.jpg',
+  },
+  keywords: ['film production', 'AI screenplay', 'storyboard generator', 'film budgeting', 'movie production', 'script writing'],
+  authors: [{ name: 'Vizir Film Pro' }],
+  openGraph: {
+    title: 'Vizir Film Pro - AI-Powered Film Production Suite',
+    description: 'Complete film production toolkit with AI-powered script generation, storyboarding, budgeting, and more.',
+    type: 'website',
+    images: ['/images/vizir_logo/vizir_logo.png'],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Vizir Film Pro - AI-Powered Film Production Suite',
+    description: 'Complete film production toolkit with AI-powered script generation, storyboarding, budgeting, and more.',
+    images: ['/images/vizir_logo/vizir_logo.png'],
+  },
 };
 
 export default function RootLayout({
