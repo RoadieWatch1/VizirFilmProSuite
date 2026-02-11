@@ -494,8 +494,50 @@ export function validateFrameSequence(frames: any[]): SequenceValidation {
 }
 
 /**
+ * SANITIZE DESCRIPTION FOR DALL-E
+ * Strip words/phrases that commonly trigger DALL-E 3 content policy
+ */
+function sanitizeForDalle(text: string): string {
+  if (!text) return '';
+  // Words/phrases that trigger DALL-E content policy
+  const BLOCKED_PATTERNS = [
+    /\b(gun|guns|rifle|pistol|revolver|shotgun|firearm|weapon|weapons)\b/gi,
+    /\b(shoot|shoots|shooting|shot at|fires at|pulls trigger)\b/gi,
+    /\b(blood|bloody|bleeding|bloodstain|gore|gory)\b/gi,
+    /\b(kill|kills|killing|murder|murders|murdered|assassin|assassination)\b/gi,
+    /\b(dead body|corpse|dead person|body bag)\b/gi,
+    /\b(stab|stabbing|stabbed|slash|slashing)\b/gi,
+    /\b(bomb|bombs|explosion|explode|explodes|grenade|dynamite)\b/gi,
+    /\b(drug|drugs|cocaine|heroin|meth|syringe|needle|inject)\b/gi,
+    /\b(nude|naked|undressed|topless|sexual|sex scene)\b/gi,
+    /\b(torture|tortures|tortured|torturing)\b/gi,
+    /\b(suicide|suicidal|hanging|hanged)\b/gi,
+    /\b(child|children|kid|kids|minor|minors|baby|infant)\b/gi,
+    /\b(real person|real people|celebrity|famous)\b/gi,
+  ];
+  const REPLACEMENTS: Record<string, string> = {
+    gun: 'prop', guns: 'props', rifle: 'long prop', pistol: 'hand prop',
+    weapon: 'prop', weapons: 'props',
+    blood: 'dark liquid', bloody: 'stained', bleeding: 'injured',
+    kill: 'confront', murder: 'confrontation',
+    stab: 'strike', slash: 'motion',
+    bomb: 'device', explosion: 'burst of light',
+    drug: 'substance', drugs: 'substances',
+  };
+  let result = text;
+  for (const pattern of BLOCKED_PATTERNS) {
+    result = result.replace(pattern, (match) => {
+      return REPLACEMENTS[match.toLowerCase()] || '';
+    });
+  }
+  // Collapse multiple spaces/commas
+  return result.replace(/\s{2,}/g, ' ').replace(/,\s*,/g, ',').trim();
+}
+
+/**
  * GENERATE COMPLIANT IMAGE PROMPT
  * Ensures the storyboard image prompt meets all requirements
+ * and is safe for DALL-E 3 content policy
  */
 export function generateCompliantImagePrompt(frame: any): string {
   const {
@@ -512,7 +554,7 @@ export function generateCompliantImagePrompt(frame: any): string {
     'Cinematic hand-drawn storyboard sketch, black and white pencil style, ' +
     'professional film pre-production, dramatic lighting, realistic proportions, ' +
     'strong composition, detailed line work, moody atmosphere, not photorealistic, ' +
-    'no color, no text, visible pencil strokes, cross-hatching effect, film grammar accurate';
+    'no color, no text, visible pencil strokes, cross-hatching effect';
 
   // Shot framing language
   const SHOT_FRAMING = {
@@ -533,11 +575,11 @@ export function generateCompliantImagePrompt(frame: any): string {
 
   // Angle language
   const ANGLE_LANGUAGE: Record<string, string> = {
-    'Low Angle': 'shot from below looking up, camera at ground level, subject towers above',
-    'High Angle': 'shot from above looking down, camera elevated, subject appears diminished',
+    'Low Angle': 'shot from below looking up, subject towers above',
+    'High Angle': 'shot from above looking down, subject appears diminished',
     'Eye Level': 'neutral eye-level camera positioning',
-    'Dutch Angle': 'tilted camera angle 30 degrees, diagonal horizon',
-    "Bird's Eye": 'overhead top-down perspective, map-like view',
+    'Dutch Angle': 'tilted camera angle, diagonal horizon',
+    "Bird's Eye": 'overhead top-down perspective',
     "Worm's Eye": 'ground-level extreme low angle view',
   };
 
@@ -545,24 +587,32 @@ export function generateCompliantImagePrompt(frame: any): string {
 
   // Lens language
   const LENS_LANGUAGE: Record<string, string> = {
-    '24mm Wide': 'ultra-wide distorted perspective, exaggerated depth, foreground emphasis',
+    '24mm Wide': 'wide perspective, exaggerated depth',
     '35mm Standard': 'moderate wide angle, natural cinematic view',
-    '50mm Standard': 'standard 50mm perspective, human eye equivalent',
-    '85mm Portrait': 'compressed telephoto perspective, isolated subject, flattened depth',
-    '135mm Telephoto': 'heavy compression, distant observation, stacked spatial planes',
+    '50mm Standard': 'standard perspective, human eye equivalent',
+    '85mm Portrait': 'compressed perspective, isolated subject',
+    '135mm Telephoto': 'heavy compression, stacked spatial planes',
   };
 
-  const lensDesc = LENS_LANGUAGE[lens as keyof typeof LENS_LANGUAGE] || lens || '';
+  const lensDesc = LENS_LANGUAGE[lens as keyof typeof LENS_LANGUAGE] || '';
 
-  // Build the prompt — keep concise for DALL-E 3 (max ~400 chars ideal)
-  const sceneDesc = String(description || '').slice(0, 200);
+  // Sanitize scene description — strip DALL-E trigger words
+  const sceneDesc = sanitizeForDalle(String(description || '').slice(0, 180));
+
+  // Replace character names with generic descriptors (names can trigger "real person" policy)
+  const charCount = characters.length;
+  const charDesc = charCount === 0 ? ''
+    : charCount === 1 ? 'featuring a figure'
+    : charCount === 2 ? 'featuring two figures'
+    : `featuring ${charCount} figures`;
+
   const prompt = [
     STORYBOARD_STYLE,
     `${shotFraming} shot, ${angleDesc}`,
-    lensDesc ? `${lensDesc}` : '',
+    lensDesc,
     `Scene: ${sceneDesc}`,
     lighting ? `${lighting} lighting` : '',
-    characters.length > 0 ? `featuring ${characters.join(', ')}` : '',
+    charDesc,
   ]
     .filter(Boolean)
     .join(', ');
