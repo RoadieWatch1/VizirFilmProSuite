@@ -85,6 +85,7 @@ export default function HomePage() {
   const [scriptLength, setScriptLength] = useState<string>("1 min");
 
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
   const [showLengthDropdown, setShowLengthDropdown] = useState(false);
@@ -180,6 +181,7 @@ export default function HomePage() {
 
     setLoading(true);
     setError(null);
+    setSuccess(null);
     setLoadingMessage("Generating your film package...");
 
     try {
@@ -241,7 +243,7 @@ export default function HomePage() {
         soundAssets: uploadedSoundAssets,
       });
 
-      setLoadingMessage("Film package generated! Navigate to other tabs to explore your content.");
+      setSuccess("Film package generated! Navigate to other tabs to explore your content.");
     } catch (err: any) {
       console.error("Generation error:", err);
       const errorMessage = err instanceof Error ? err.message : "An unexpected error occurred.";
@@ -467,6 +469,12 @@ export default function HomePage() {
               {error && (
                 <div className={cn("text-red-400 text-center p-3 bg-red-400/10 rounded-lg")}>
                   {error}
+                </div>
+              )}
+
+              {success && !loading && (
+                <div className={cn("text-green-400 text-center p-3 bg-green-400/10 rounded-lg")}>
+                  {success}
                 </div>
               )}
 

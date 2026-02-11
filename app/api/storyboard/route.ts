@@ -30,14 +30,19 @@ export async function POST(request: NextRequest) {
 
       // Enforce cinematic hand-drawn storyboard style
       const BW_PREFIX = "Cinematic hand-drawn storyboard sketch, black and white pencil style, professional film storyboard, dramatic lighting, realistic proportions, strong composition,";
-      const BW_SUFFIX = "Detailed line work, moody atmosphere, film pre-production storyboard, visible pencil strokes and cross-hatching for shadows, charcoal and ink sketch texture, not photorealistic, no color, no text, no captions, no UI elements.";
-      const safePrompt = imagePrompt.startsWith("Cinematic hand-drawn")
-        ? `${imagePrompt} ${BW_SUFFIX}`
-        : `${BW_PREFIX} ${imagePrompt} ${BW_SUFFIX}`;
+      const BW_SUFFIX = "detailed line work, moody atmosphere, visible pencil strokes, charcoal sketch texture, not photorealistic, no color, no text, no UI elements.";
 
-      // Truncate to DALL-E 3 prompt limit (~4000 chars)
-      const finalPrompt = safePrompt.length > 3900
-        ? safePrompt.slice(0, 3900) + "..."
+      // Don't double-wrap prompts already from generateCompliantImagePrompt
+      let safePrompt: string;
+      if (imagePrompt.startsWith("Cinematic hand-drawn")) {
+        safePrompt = imagePrompt;
+      } else {
+        safePrompt = `${BW_PREFIX} ${imagePrompt}, ${BW_SUFFIX}`;
+      }
+
+      // Truncate — shorter prompts work better with DALL-E 3 and avoid content policy triggers
+      const finalPrompt = safePrompt.length > 950
+        ? safePrompt.slice(0, 950)
         : safePrompt;
 
       const result = await openai.images.generate({

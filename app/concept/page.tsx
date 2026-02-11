@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { useFilmStore } from "@/lib/store";
 
 type ConceptData = {
   visualStyle?: string;
@@ -26,11 +27,13 @@ type VisualReference = {
 };
 
 export default function ConceptPage() {
+  const { filmPackage } = useFilmStore();
   const [concept, setConcept] = useState<ConceptData | null>(null);
   const [visualReferences, setVisualReferences] = useState<VisualReference[]>(
     []
   );
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Load concept from local storage
   useEffect(() => {
@@ -63,7 +66,13 @@ export default function ConceptPage() {
   }, [visualReferences]);
 
   const handleGenerateConcept = async () => {
+    if (!filmPackage?.script || !filmPackage?.genre) {
+      alert("Please generate a script first from the Create tab.");
+      return;
+    }
+
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
@@ -72,18 +81,15 @@ export default function ConceptPage() {
         },
         body: JSON.stringify({
           step: "concept",
-          movieIdea:
-            "A detective investigates mysterious disappearances in a small town.",
-          movieGenre: "Psychological Thriller",
-          scriptLength: "10 min",
+          scriptContent: filmPackage.script,
+          movieGenre: filmPackage.genre,
+          scriptLength: filmPackage.length || "10 min",
         }),
       });
 
       if (!res.ok) {
-        const errorData = await res.json();
-        console.error(errorData);
-        alert("Failed to generate concept.");
-        return;
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData?.error || "Failed to generate concept.");
       }
 
       const data = await res.json();
@@ -100,9 +106,9 @@ export default function ConceptPage() {
 
       setConcept(conceptData);
       setVisualReferences(data.visualReferences || []);
-    } catch (error) {
-      console.error("Failed to generate concept:", error);
-      alert("An error occurred while generating the concept.");
+    } catch (err: any) {
+      console.error("Failed to generate concept:", err);
+      setError(err?.message || "An error occurred while generating the concept.");
     } finally {
       setLoading(false);
     }
@@ -157,6 +163,12 @@ export default function ConceptPage() {
               </Button>
             </div>
           </div>
+
+          {error && (
+            <div className="text-red-400 text-center p-3 bg-red-400/10 rounded-lg mb-4">
+              {error}
+            </div>
+          )}
 
           {/* Concept Content */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

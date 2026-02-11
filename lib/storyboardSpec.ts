@@ -504,8 +504,6 @@ export function generateCompliantImagePrompt(frame: any): string {
     cameraAngle,
     lens,
     lighting,
-    composition,
-    actionNotes,
     characters = [],
   } = frame;
 
@@ -556,23 +554,18 @@ export function generateCompliantImagePrompt(frame: any): string {
 
   const lensDesc = LENS_LANGUAGE[lens as keyof typeof LENS_LANGUAGE] || lens || '';
 
-  // Build the prompt
+  // Build the prompt — keep concise for DALL-E 3 (max ~400 chars ideal)
+  const sceneDesc = String(description || '').slice(0, 200);
   const prompt = [
     STORYBOARD_STYLE,
-    '',
     `${shotFraming} shot, ${angleDesc}`,
-    lensDesc ? `Lens perspective: ${lensDesc}` : '',
-    '',
-    `Scene: ${description}`,
-    actionNotes ? `Action/Staging: ${actionNotes}` : '',
-    lighting ? `Lighting: ${lighting}` : '',
-    composition ? `Composition: ${composition}` : '',
-    characters.length > 0 ? `Characters: ${characters.join(', ')}` : '',
-    '',
-    'Film grammar exact compliance required. No interpretation allowed.',
+    lensDesc ? `${lensDesc}` : '',
+    `Scene: ${sceneDesc}`,
+    lighting ? `${lighting} lighting` : '',
+    characters.length > 0 ? `featuring ${characters.join(', ')}` : '',
   ]
     .filter(Boolean)
-    .join('\n');
+    .join(', ');
 
   return prompt.trim();
 }

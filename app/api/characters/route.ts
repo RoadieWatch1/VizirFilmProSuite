@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
       }
 
       const visualDescription = buildVisualDescription(character);
-      const imagePrompt = `Photorealistic full-body portrait of a real person portraying the character. ${visualDescription}. Cinematic style, high detail, natural colors, realistic textures and lighting. Ensure full head and body are in frame, no cropping. The image should look like a professional actor in costume, ready for film production.`;
+      const imagePrompt = `Cinematic character portrait for film production. ${visualDescription}. Professional movie production style, high detail, natural colors, dramatic cinematic lighting. Full head and upper body visible, costume and styling visible. Looks like a professional film character study sheet.`.slice(0, 950);
 
       try {
         const openai = getOpenAI();
@@ -55,6 +55,7 @@ export async function POST(request: NextRequest) {
           prompt: imagePrompt,
           n: 1,
           size: "1024x1792",
+          style: "natural",
         });
 
         const imageUrl = dalleImage.data?.[0]?.url || "";
@@ -64,10 +65,17 @@ export async function POST(request: NextRequest) {
           imageUrl,
           visualDescription,
         });
-      } catch (err) {
+      } catch (err: any) {
         console.error("DALL-E error:", err);
+        const msg = String(err?.message || "").toLowerCase();
+        if (msg.includes("content_policy") || msg.includes("safety")) {
+          return NextResponse.json(
+            { error: "Portrait was blocked by content policy. Try adjusting character description." },
+            { status: 400 }
+          );
+        }
         return NextResponse.json(
-          { error: "Failed to generate portrait." },
+          { error: err?.message || "Failed to generate portrait." },
           { status: 500 }
         );
       }
