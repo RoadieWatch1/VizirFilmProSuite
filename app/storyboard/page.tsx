@@ -13,6 +13,7 @@ import {
   Lightbulb,
   Crosshair,
   ArrowRight,
+  Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -81,6 +82,7 @@ export default function StoryboardPage() {
     filmPackage?.storyboard || []
   );
   const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [generatingImages, setGeneratingImages] = useState<Set<number>>(new Set());
   const [expandedFrames, setExpandedFrames] = useState<Set<number>>(new Set());
 
@@ -220,6 +222,37 @@ export default function StoryboardPage() {
     }
   };
 
+  const handleDownloadStoryboard = async () => {
+    if (storyboard.length === 0) return;
+    setDownloading(true);
+    try {
+      const res = await fetch("/api/download-storyboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storyboard }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        alert(err.error || "Failed to download storyboard.");
+        return;
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `storyboard_${new Date().getTime()}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (error) {
+      console.error("Storyboard download error:", error);
+      alert("Failed to download storyboard package.");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   // Stats
   const uniqueScenes = getUniqueScenes(storyboard);
   const totalCoverage = storyboard.reduce(
@@ -290,6 +323,23 @@ export default function StoryboardPage() {
                 {storyboard.length} shots across {uniqueScenes.length} scenes
               </p>
             </div>
+            <Button
+              onClick={handleDownloadStoryboard}
+              disabled={downloading || storyboard.length === 0}
+              className="bg-green-600 hover:bg-green-700 text-white mt-4 md:mt-0"
+            >
+              {downloading ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Downloading...
+                </>
+              ) : (
+                <>
+                  <Download className="w-4 h-4 mr-2" />
+                  Download Package
+                </>
+              )}
+            </Button>
           </div>
 
           {/* Stats Bar */}

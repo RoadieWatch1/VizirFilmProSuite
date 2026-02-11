@@ -1,10 +1,9 @@
 // app/sound/page.tsx
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   Music,
-  Plus,
   Play,
   Pause,
   Loader2,
@@ -30,6 +29,16 @@ export default function SoundPage() {
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+
+  // Stop audio playback when navigating away
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = "";
+      }
+    };
+  }, []);
 
   const soundAssets: SoundAsset[] = filmPackage?.soundAssets || [];
 
@@ -171,29 +180,20 @@ export default function SoundPage() {
               <p className="text-[#B2C8C9] mb-6">
                 Generate sound recommendations based on your script or add assets manually.
               </p>
-              <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                <Button
-                  onClick={handleGenerateSound}
-                  disabled={loading}
-                  className="bg-[#FF6A00] hover:bg-[#E55A00] text-white"
-                >
-                  {loading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Generating...
-                    </>
-                  ) : (
-                    "Generate Sound Design"
-                  )}
-                </Button>
-                <Button
-                  variant="outline"
-                  className="border-[#FF6A00] text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white"
-                >
-                  <Plus className="w-4 h-4 mr-2" />
-                  Add Asset
-                </Button>
-              </div>
+              <Button
+                onClick={handleGenerateSound}
+                disabled={loading}
+                className="bg-[#FF6A00] hover:bg-[#E55A00] text-white"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  "Generate Sound Design"
+                )}
+              </Button>
             </Card>
           </div>
         </div>
@@ -211,17 +211,13 @@ export default function SoundPage() {
               <p className="text-[#B2C8C9]">Audio assets and sound design</p>
             </div>
             <div className="flex gap-2 flex-wrap">
-              <Button 
+              <Button
                 onClick={handleDownloadSoundAssets}
                 disabled={loading || soundAssets.length === 0}
                 className="bg-green-600 hover:bg-green-700 text-white mt-4 md:mt-0"
               >
                 <Download className="w-4 h-4 mr-2" />
                 Download Package
-              </Button>
-              <Button className="bg-[#FF6A00] hover:bg-[#E55A00] text-white mt-4 md:mt-0">
-                <Plus className="w-4 h-4 mr-2" />
-                Add Asset
               </Button>
             </div>
           </div>
