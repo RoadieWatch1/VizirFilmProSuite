@@ -2457,26 +2457,66 @@ RULES:
 };
 // ---------- Schedule ----------
 export const generateSchedule = async (script: string, length: string) => {
+  // Estimate shooting days from script length
+  const words = countWords(script);
+  const approxMinutes = clampInt(Math.round(words / SCRIPT_WORDS_PER_PAGE), 1, 180);
+  const shootDays =
+    approxMinutes <= 1 ? 1
+    : approxMinutes <= 5 ? 2
+    : approxMinutes <= 10 ? 3
+    : approxMinutes <= 30 ? clampInt(Math.round(approxMinutes / 5), 4, 8)
+    : approxMinutes <= 60 ? clampInt(Math.round(approxMinutes / 4), 10, 18)
+    : clampInt(Math.round(approxMinutes / 3), 18, 45);
+
   const prompt = `
-Given this film script:
+You are an experienced 1st Assistant Director creating a professional shooting schedule.
+Analyze this film script and create a realistic, day-by-day production schedule.
+
+SCRIPT (${length}, approx ${approxMinutes} minutes):
+"""
 ${tail(script, 20000)}
-Generate a shooting schedule for a film of length ${length}.
+"""
+
+SCHEDULING RULES:
+- Create exactly ${shootDays} shooting days
+- Group scenes by LOCATION to minimize company moves (shoot all scenes at one location before moving)
+- Schedule exterior/daylight scenes early in the day, interior scenes later
+- Put the most complex scenes (stunts, VFX, crowd) on days with fewer total scenes
+- Each day should be 10-14 hours including setup, meals, and wrap
+- Include specific crew departments needed per day
+- Activities should be specific scene references, not generic descriptions
+
+For each day provide:
+- "day": "Day 1 — [Primary Location]" (include the main location in the day title)
+- "activities": Array of 4-8 specific tasks like:
+  * "7:00 AM — Crew call, set up lighting at [Location]"
+  * "8:30 AM — Shoot Scene 3: [brief description]"
+  * "10:00 AM — Shoot Scene 7: [brief description]"
+  * "12:30 PM — Lunch break (1 hour)"
+  * "1:30 PM — Shoot Scene 12: [brief description]"
+  * "4:00 PM — Company move to [Next Location]"
+  * "5:00 PM — Shoot Scene 15: [brief description]"
+  * "7:00 PM — Wrap"
+- "duration": Realistic hours like "12 hours" or "10 hours"
+- "location": Primary shooting location for that day (from the script)
+- "crew": Array of crew departments needed, e.g. ["Director", "DP", "Sound", "Gaffer", "Grip", "Art Dept", "Hair/Makeup", "PA x2"]
+
 Return JSON:
 {
   "schedule": [
     {
-      "day": "Day 1",
-      "activities": ["..."],
-      "duration": "...",
-      "location": "...",
-      "crew": ["..."]
+      "day": "Day 1 — Location Name",
+      "activities": ["7:00 AM — Crew call, lighting setup", "8:30 AM — Shoot Scene 1: ..."],
+      "duration": "12 hours",
+      "location": "Location from script",
+      "crew": ["Director", "DP", "Sound", "Gaffer"]
     }
   ]
 }
 `.trim();
   const res = await callOpenAIJsonSchema<{ schedule: any[] }>(prompt, buildScheduleSchema(), {
     temperature: 0.3,
-    max_tokens: 2200,
+    max_tokens: 6000,
     request_tag: "schedule",
     schema_name: "Schedule",
     model: MODEL_JSON_RAW,

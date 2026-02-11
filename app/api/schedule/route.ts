@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateSchedule } from '@/lib/generators';
 
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const maxDuration = 120;
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -15,21 +19,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Call your generator
-    const schedule = await generateSchedule(script, scriptLength);
+    const result = await generateSchedule(script, scriptLength);
+    const schedule = result?.schedule;
 
-    if (!schedule || !Array.isArray(schedule)) {
+    if (!schedule || !Array.isArray(schedule) || schedule.length === 0) {
       return NextResponse.json(
         { error: 'Failed to generate a valid schedule.' },
         { status: 500 }
       );
     }
 
-    return NextResponse.json({
-      success: true,
-      message: 'Schedule generated successfully.',
-      schedule
-    });
+    return NextResponse.json({ schedule });
 
   } catch (error: any) {
     console.error('[API] Schedule generation error:', error);

@@ -10,14 +10,16 @@ import { useFilmStore } from "@/lib/store";
 export default function SchedulePage() {
   const { filmPackage, updateFilmPackage } = useFilmStore();
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleGenerateSchedule = async () => {
     if (!filmPackage?.script || !filmPackage?.length) {
-      alert("Please generate a script first from the Create tab.");
+      setError("Please generate a script first from the Create tab.");
       return;
     }
 
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch("/api/schedule", {
         method: "POST",
@@ -31,10 +33,8 @@ export default function SchedulePage() {
       });
 
       if (!res.ok) {
-        const errorData = await res.json();
-        console.error(errorData);
-        alert("Failed to generate schedule.");
-        return;
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData?.error || "Failed to generate schedule.");
       }
 
       const data = await res.json();
@@ -43,11 +43,9 @@ export default function SchedulePage() {
       updateFilmPackage({
         schedule: data.schedule || [],
       });
-
-      alert("Schedule generated successfully!");
-    } catch (error) {
-      console.error("Failed to generate schedule:", error);
-      alert("An error occurred while generating schedule. Please try again.");
+    } catch (err: any) {
+      console.error("Failed to generate schedule:", err);
+      setError(err?.message || "An error occurred while generating schedule.");
     } finally {
       setLoading(false);
     }
@@ -75,6 +73,12 @@ export default function SchedulePage() {
                 Plan your shooting schedule and timeline
               </p>
             </div>
+
+            {error && (
+              <div className="text-red-400 text-center p-3 bg-red-400/10 rounded-lg mb-4">
+                {error}
+              </div>
+            )}
 
             <Card className="glass-effect border-[#FF6A00]/20 p-8 text-center">
               <h3 className="text-xl font-semibold text-white mb-4">
@@ -140,8 +144,28 @@ export default function SchedulePage() {
                 </div>
                 <div className="text-sm text-[#B2C8C9]">Hours</div>
               </div>
+              <Button
+                onClick={handleGenerateSchedule}
+                disabled={loading}
+                className="bg-[#FF6A00] hover:bg-[#E55A00] text-white"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  "Regenerate"
+                )}
+              </Button>
             </div>
           </div>
+
+          {error && (
+            <div className="text-red-400 text-center p-3 bg-red-400/10 rounded-lg mb-4">
+              {error}
+            </div>
+          )}
 
           {/* Schedule Timeline */}
           <div className="space-y-6">
