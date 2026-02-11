@@ -1,5 +1,11 @@
 // C:\Users\vizir\VizirPro\lib\generators.ts
 import OpenAI from "openai";
+import {
+  validateStoryboardFrame,
+  validateFrameSequence,
+  generateCompliantImagePrompt,
+  getMultiFrameStrategy,
+} from "./storyboardSpec";
 /**
  * ✅ Build-safe OpenAI init (prevents Vercel build crash when env vars aren't present at build time)
  * - DO NOT instantiate OpenAI at module load.
@@ -2087,6 +2093,13 @@ For ${genre} films, ensure characters fit the genre's visual and tonal conventio
   return { characters: res.data?.characters || [] };
 };
 // ---------- Storyboard ----------
+/**
+ * ✅ ENHANCED STORYBOARD GENERATION
+ * - Uses strict film grammar from storyboardSpec.ts
+ * - Generates 3 compliant frames per scene (establishing, action, detail)
+ * - Validates all frames before returning
+ * - Creates proper cinematographic language in prompts
+ */
 export const generateStoryboard = async ({
   movieIdea,
   movieGenre,
@@ -2101,143 +2114,263 @@ export const generateStoryboard = async ({
   characters: Character[];
 }) => {
   const duration = parseLengthToMinutes(scriptLength);
-  // Reduced frame counts to fit within token budget (no coverage shots in initial generation)
-  const numFrames = duration <= 5 ? 6 : duration <= 15 ? 10 : duration <= 30 ? 16 : duration <= 60 ? 24 : 32;
-  // Scale token budget: ~350 tokens per frame for all fields, raise cap to 16000
-  const storyboardMaxTokens = clamp(Math.round(numFrames * 350), 4000, 16000);
-  const charSummary = characters.slice(0, 10).map(c =>
-    `${c.name} (${c.role}): ${c.visualDescription || c.description || ""}`.slice(0, 200)
-  ).join("\n");
-  const prompt = `
-You are a professional storyboard artist and cinematographer. Generate a shot-by-shot storyboard for this ${movieGenre} film.
+  // Generate main frames (coverage frames will be added per scene)
+  const numMainFrames = duration <= 5 ? 4 : duration <= 15 ? 6 : duration <= 30 ? 8 : duration <= 60 ? 12 : 16;
+  const storyboardMaxTokens = clamp(Math.round(numMainFrames * 400), 6000, 16000);
 
-FILM IDEA: ${movieIdea}
+  const charSummary = characters.slice(0, 8).map(c =>
+    `${c.name} (${c.role}): ${c.visualDescription || c.description || ""}`.slice(0, 180)
+  ).join("\n");
+
+  // ✅ STRICT STORYBOARD GRAMMAR PROMPT
+  const prompt = `
+You are a PROFESSIONAL STORYBOARD ARTIST and CINEMATOGRAPHER.
+Your ONLY job is to generate battle-ready storyboard frames for a film productions.
+
+FILM CONTEXT:
+Genre: ${movieGenre}
+Idea: ${movieIdea}
 
 SCRIPT (trimmed):
-${tail(script, 18000)}
+${tail(script, 16000)}
 
 KEY CHARACTERS:
 ${charSummary}
 
-REQUIREMENTS — GENERATE EXACTLY ${numFrames} MAIN FRAMES:
+=================================================================
+CRITICAL RULES (NON-NEGOTIABLE):
+=================================================================
 
-For EACH main frame, provide these fields:
-- scene: Scene heading (e.g. "INT. WAREHOUSE - NIGHT")
-- shotNumber: Sequential shot ID (e.g. "1A", "1B", "2A")
-- description: What is visually happening (2-3 sentences, vivid and specific)
-- shotSize: ECU, CU, MCU, MS, MLS, LS, ELS, OS, POV, 2-Shot, or Insert
-- cameraAngle: Eye Level, Low Angle, High Angle, Dutch/Tilted, Bird's Eye, Worm's Eye, or Overhead
-- cameraMovement: Static, Pan Left, Pan Right, Tilt Up, Tilt Down, Dolly In, Dolly Out, Tracking, Crane, Handheld, Steadicam, Zoom In, Zoom Out
-- lens: Focal length (e.g. "24mm Wide", "85mm Portrait", "135mm Telephoto")
-- lighting: Setup (e.g. "Low key — single hard source", "Rembrandt", "Silhouette", "High Key")
-- composition: Framing rule (e.g. "Rule of thirds — subject right", "Center frame", "Leading lines")
-- duration: Shot duration (e.g. "3s", "5s")
-- dialogue: Dialogue spoken (or "")
-- soundEffects: Sound design (or "")
-- actionNotes: Blocking/choreography (or "")
-- transition: CUT TO:, DISSOLVE TO:, SMASH CUT:, MATCH CUT:, etc. Last frame: "FADE TO BLACK."
-- notes: Director notes (or "")
-- imagePrompt: MUST start with "Cinematic hand-drawn storyboard sketch, black and white pencil style, professional film storyboard, dramatic lighting, realistic proportions, strong composition," then include the specific shot type (wide establishing shot / medium action shot / close-up cinematic shot), then describe the scene with characters, environment, perspective, mood, silhouettes. Must include: "detailed line work, moody atmosphere, film pre-production storyboard, not photorealistic, no color, no text"
-- imageUrl: Always ""
+1. SHOT SIZE GRAMMAR (EXACT):
+   - ELS: Environment dominates, character tiny reference
+   - LS: Full body visible, ~30% of frame, environment shows context
+   - MS: Waist-to-head, ~50-60% of frame, primary dialogue framing
+   - CU: Face-only or hands-only, fills most of frame
+   - OS: Over-shoulder dialogue, rear character 20%, front fills rest
+   - INSERT: Object detail fills frame alone
+   - 2-Shot: Both characters visible, ~30% each with space between
 
-SHOT VARIETY:
-- Mix ECU, CU, MS, LS — don't repeat the same size 3+ times in a row
-- Use ELS/LS establishing shots at new scenes
-- CU for emotional beats, MS for dialogue, tracking for dynamic moments
+2. CAMERA ANGLES (STRICT ENFORCEMENT):
+   - Low Angle: Camera MUST be below eye level, subject towers
+   - High Angle: Camera MUST be above eye level, subject diminished
+   - Eye Level: Neutral horizon, no power dynamic
+   - Dutch Angle: Horizon tilted 30° visibly, chaos/danger intent
+   - Bird's Eye: Camera directly overhead, map/surveillance view
+   - Worm's Eye: Ground level extreme low, creature perspective
 
-Return JSON: { "storyboard": [ ... ] }
+3. LENSES (PERSPECTIVE IS MANDATORY):
+   - 24mm Wide: Exaggerated depth, foreground emphasis, slight distortion
+   - 50mm Standard: Natural eye view, minimal distortion
+   - 85mm Portrait: Compressed space, isolated subject, romantic feel
+   - 135mm Telephoto: Heavy compression, stacked planes, surveillance mood
+
+4. COMPOSITION (VISIBLE RULES):
+   - Rule of Thirds: Subject on grid intersections, NOT centered
+   - Center Frame: Subject dead-center, symmetrical authority
+   - Leading Lines: Paths/shadows converge at subject
+   - Frame within Frame: Foreground elements create secondary frame
+
+5. SHOT VARIETY:
+   - DO NOT repeat same shot size 3+ times consecutively
+   - Mix ELS (5%), LS (20%), MS (40%), CU (25%), INSERT/OS (10%)
+   - ELS for new locations, CU for emotional peaks
+
+6. DIALOGUE & ACTION BLOCKING:
+   - "dialogue" field: Exact spoken words if applicable, blank otherwise
+   - "actionNotes": Specific choreography, movement, hand placement
+   - NEVER generic action; be SPECIFIC (not "character walks" but "character crosses camera L→R, stops at door")
+
+7. CAMERA MOVEMENT:
+   - Static: Locked tripod
+   - Pan/Tilt: Horizontal/vertical head movement
+   - Dolly: Camera physically moves forward/backward
+   - Tracking: Follows subject movement
+   - Handheld: Intentional camera shake
+   - Steadicam: Smooth flowing movement
+   - Crane: Vertical rise/fall
+
+=================================================================
+GENERATE EXACTLY ${numMainFrames} MAIN FRAMES
+=================================================================
+
+For EACH frame, provide JSON with these EXACT fields:
+{
+  "scene": "INT/EXT. LOCATION - TIME", // Scene heading
+  "shotNumber": "1A", // Sequential ID (1A, 2A, etc.)
+  "description": "2-3 sentences vivid visual description",
+  "shotSize": "LS|MS|CU|OS|2-Shot|ELS|INSERT|MCU|MLS|ECU|POV", // NO other values
+  "cameraAngle": "Eye Level|Low Angle|High Angle|Dutch Angle|Bird's Eye|Worm's Eye", // EXACT match
+  "cameraMovement": "Static|Pan|Tilt|Dolly|Tracking|Crane|Handheld|Steadicam|Zoom", // Specify direction
+  "lens": "24mm Wide|50mm Standard|85mm Portrait|135mm Telephoto", // EXACT focal lengths
+  "lighting": "High Key|Low Key|Rembrandt|Silhouette|Practical|Natural|Mixed", // EXACT terms
+  "composition": "Rule of Thirds — [left|center|right]|Center Frame|Leading Lines|Frame within Frame",
+  "duration": "Xs", // Shot duration (2s-10s typical)
+  "dialogue": "Exact dialogue or empty string",
+  "soundEffects": "Sound design description or empty string",
+  "actionNotes": "SPECIFIC choreography, blocking, hand placement, movement direction",
+  "transition": "CUT TO:|DISSOLVE TO:|SMASH CUT:|MATCH CUT:|FADE TO:", // For transitions
+  "notes": "Director guidance or story intent",
+  "imagePrompt": "Generated based on visual specification",
+  "imageUrl": ""
+}
+
+RETURN ONLY:
+{ "storyboard": [ ... frames ... ] }
+
+NO COMMENTARY. NO EXPLANATIONS. JSON ONLY.
 `.trim();
+
   const res = await callOpenAIJsonSchema<{ storyboard: StoryboardFrame[] }>(prompt, buildStoryboardSchema(), {
-    temperature: 0.4,
+    temperature: 0.35,
     max_tokens: storyboardMaxTokens,
     request_tag: "storyboard",
     schema_name: "Storyboard",
     model: MODEL_JSON_RAW,
   });
+
   let frames = res.data?.storyboard || [];
   frames = Array.isArray(frames) ? frames : [];
-  const PROMPT_PREFIX = "Cinematic hand-drawn storyboard sketch, black and white pencil style, professional film storyboard, dramatic lighting, realistic proportions, strong composition,";
-  const PROMPT_SUFFIX = "detailed line work, moody atmosphere, film pre-production storyboard, not photorealistic, no color, no text";
+
+  // ✅ POST-PROCESS: Validate and enhance frames with compliant image prompts
   frames = frames.map((f, idx) => {
-    const sceneDesc = String(f.description || "A cinematic scene.");
-    const sceneHeading = String(f.scene || "");
-    const basePrompt = String(f.imagePrompt || "").startsWith("Cinematic hand-drawn")
-      ? String(f.imagePrompt)
-      : `${PROMPT_PREFIX} ${String(f.imagePrompt || sceneDesc)}, ${PROMPT_SUFFIX}`;
-    // Generate 3 coverage shots per frame: wide, medium, close-up
+    // Validate the frame
+    const validation = validateStoryboardFrame(f);
+    if (!validation.isValid) {
+      console.warn(`⚠️ Frame ${idx + 1} validation issues:`, validation.errors);
+    }
+
+    // Generate compliant image prompt using storyboard spec
+    const charNames = characters
+      .slice(0, 3)
+      .map(c => c.name)
+      .filter(Boolean);
+
+    const imagePrompt = generateCompliantImagePrompt({
+      ...f,
+      characters: charNames,
+    });
+
+    // Create 3-frame coverage strategy for each main frame
+    const multiFrameStrategy = getMultiFrameStrategy(f.description || "");
+
     const coverageShots: StoryboardFrame[] = [
       {
-        scene: sceneHeading,
-        shotNumber: `${f.shotNumber || idx + 1}-W`,
-        description: `Wide establishing shot: ${sceneDesc}`,
-        shotSize: "ELS",
+        // FRAME 1: ESTABLISHING
+        scene: f.scene,
+        shotNumber: `${f.shotNumber}-EST`,
+        description: `Establishing shot: ${f.description}`,
+        shotSize: "LS",
         cameraAngle: "Eye Level",
-        cameraMovement: String(f.cameraMovement || "Static"),
+        cameraMovement: "Static",
         lens: "24mm Wide",
-        lighting: String(f.lighting || "Natural"),
-        composition: "Full environment visible, characters placed for scale",
-        duration: String(f.duration || "3s"),
+        lighting: f.lighting || "Natural",
+        composition: "Rule of Thirds — environment dominates left/right thirds",
+        duration: "4s",
         dialogue: "",
-        soundEffects: String(f.soundEffects || ""),
-        actionNotes: "Establishing shot — sets mood, location, and scale",
+        soundEffects: f.soundEffects || "",
+        actionNotes: "Establish location, scale, and character placement. Wide perspective showing full environment.",
         transition: "CUT TO:",
-        notes: "",
-        imagePrompt: `${PROMPT_PREFIX} wide establishing shot, ${sceneDesc} Full environment visible with character placement for scale. Strong depth and perspective, ${PROMPT_SUFFIX}`,
+        notes: "Set up spatial geography",
+        imagePrompt: generateCompliantImagePrompt({
+          description: `Wide establishing shot of ${f.scene}: ${f.description}`,
+          shotSize: "LS",
+          cameraAngle: "Eye Level",
+          lens: "24mm Wide",
+          lighting: f.lighting || "Natural",
+          composition: "Rule of Thirds — environment left/right",
+          actionNotes: "Full bodies visible, environment shows context and scale",
+          characters: charNames,
+        }),
         imageUrl: "",
       },
       {
-        scene: sceneHeading,
-        shotNumber: `${f.shotNumber || idx + 1}-M`,
-        description: `Medium action shot: ${sceneDesc}`,
+        // FRAME 2: ACTION/DIALOGUE
+        scene: f.scene,
+        shotNumber: `${f.shotNumber}-ACT`,
+        description: `Action shot: ${f.description}`,
         shotSize: "MS",
-        cameraAngle: String(f.cameraAngle || "Eye Level"),
-        cameraMovement: String(f.cameraMovement || "Static"),
+        cameraAngle: f.cameraAngle || "Eye Level",
+        cameraMovement: f.cameraMovement || "Static",
         lens: "50mm Standard",
-        lighting: String(f.lighting || "Natural"),
-        composition: "Character movement and interaction emphasized",
-        duration: String(f.duration || "3s"),
-        dialogue: String(f.dialogue || ""),
-        soundEffects: String(f.soundEffects || ""),
-        actionNotes: "Action shot — focuses on character movement and body language",
+        lighting: f.lighting || "Natural",
+        composition: f.composition || "Rule of Thirds — subject right",
+        duration: "3s",
+        dialogue: f.dialogue || "",
+        soundEffects: "",
+        actionNotes: f.actionNotes || "Character movement and interaction. Strong body language visible.",
         transition: "CUT TO:",
-        notes: "",
-        imagePrompt: `${PROMPT_PREFIX} medium action shot, ${sceneDesc} Strong body language and cinematic framing, character interaction visible, ${PROMPT_SUFFIX}`,
+        notes: "Character performance, dialogue delivery, movement",
+        imagePrompt: generateCompliantImagePrompt({
+          description: `Medium action shot: ${f.description}`,
+          shotSize: "MS",
+          cameraAngle: f.cameraAngle || "Eye Level",
+          lens: "50mm Standard",
+          lighting: f.lighting || "Natural",
+          composition: f.composition || "Rule of Thirds",
+          actionNotes: f.actionNotes || "Emphasize character interaction and body language",
+          characters: charNames,
+        }),
         imageUrl: "",
       },
       {
-        scene: sceneHeading,
-        shotNumber: `${f.shotNumber || idx + 1}-C`,
-        description: `Close-up cinematic shot: ${sceneDesc}`,
+        // FRAME 3: TENSION/DETAIL
+        scene: f.scene,
+        shotNumber: `${f.shotNumber}-DET`,
+        description: `Detail shot: ${f.description}`,
         shotSize: "CU",
-        cameraAngle: String(f.cameraAngle || "Eye Level"),
+        cameraAngle: "Low Angle",
         cameraMovement: "Static",
         lens: "85mm Portrait",
-        lighting: String(f.lighting || "Low Key"),
-        composition: "Tight framing on face or key detail, dramatic lighting",
-        duration: String(f.duration || "2s"),
-        dialogue: String(f.dialogue || ""),
+        lighting: f.lighting || "Low Key",
+        composition: "Center Frame — dramatic focus on face or critical detail",
+        duration: "2s",
+        dialogue: f.dialogue || "",
         soundEffects: "",
-        actionNotes: "Close-up — emphasizes emotion, tension, or key story beat",
-        transition: String(f.transition || "CUT TO:"),
-        notes: "",
-        imagePrompt: `${PROMPT_PREFIX} close-up cinematic shot, ${sceneDesc} Dramatic lighting and facial expression or key detail emphasized, shallow depth of field feel, ${PROMPT_SUFFIX}`,
+        actionNotes: "Tight framing. Emotional intensity. Psychological moment.",
+        transition: f.transition || "CUT TO:",
+        notes: "Close scrutiny of character emotion or critical plot detail",
+        imagePrompt: generateCompliantImagePrompt({
+          description: `Close-up detail shot: ${f.description}`,
+          shotSize: "CU",
+          cameraAngle: "Low Angle",
+          lens: "85mm Portrait",
+          lighting: f.lighting || "Low Key",
+          composition: "Center Frame — tight dramatic",
+          actionNotes: "Extreme close-up showing emotion, intensity, psychological state",
+          characters: charNames,
+        }),
         imageUrl: "",
       },
     ];
+
     return {
-      ...f,
+      scene: f.scene,
       shotNumber: String(f.shotNumber || `${idx + 1}A`),
+      description: f.description,
       shotSize: String(f.shotSize || "MS"),
       cameraAngle: String(f.cameraAngle || "Eye Level"),
+      cameraMovement: String(f.cameraMovement || "Static"),
       lens: String(f.lens || "50mm Standard"),
       lighting: String(f.lighting || "Natural"),
-      composition: String(f.composition || "Center frame"),
+      composition: String(f.composition || "Rule of Thirds"),
+      duration: String(f.duration || "3s"),
+      dialogue: String(f.dialogue || ""),
+      soundEffects: String(f.soundEffects || ""),
+      actionNotes: String(f.actionNotes || ""),
       transition: String(f.transition || "CUT TO:"),
-      imagePrompt: basePrompt,
+      notes: String(f.notes || ""),
+      imagePrompt,
       imageUrl: "",
       coverageShots,
     };
   });
+
+  // ✅ VALIDATE entire sequence
+  const sequenceValidation = validateFrameSequence(frames);
+  if (sequenceValidation.warnings.length > 0) {
+    console.warn("⚠️ Sequence warnings:", sequenceValidation.warnings);
+  }
+
   return frames;
 };
 // ---------- Concept ----------
