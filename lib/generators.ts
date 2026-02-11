@@ -1064,7 +1064,7 @@ function buildLocationsSchema() {
           ],
           properties: {
             name: { type: "string" },
-            type: { type: "string" },
+            type: { type: "string", enum: ["Interior", "Exterior"] },
             description: { type: "string" },
             mood: { type: "string" },
             colorPalette: { type: "string" },
@@ -2396,7 +2396,7 @@ Return JSON.
   };
 };
 // ---------- Budget ----------
-export const generateBudget = async (genre: string, length: string) => {
+export const generateBudget = async (genre: string, length: string, lowBudgetMode: boolean = false) => {
   const duration = parseLengthToMinutes(length);
   const baseBudget =
     duration <= 5 ? 5000 :
@@ -2404,32 +2404,51 @@ export const generateBudget = async (genre: string, length: string) => {
     duration <= 30 ? 50000 :
     duration <= 60 ? 100000 :
     duration <= 120 ? 200000 : 500000;
-  const genreMultiplier = /sci[- ]?fi|action/i.test(genre) ? 1.5 : 1;
-  const total = Math.round(baseBudget * genreMultiplier);
+  const genreMultiplier = /sci[- ]?fi|action|fantasy|horror/i.test(genre) ? 1.5 : /drama|comedy|romance/i.test(genre) ? 0.85 : 1;
+  const rawTotal = Math.round(baseBudget * genreMultiplier);
+  const total = lowBudgetMode ? Math.round(rawTotal * 0.5) : rawTotal;
   const prompt = `
-Generate a detailed film budget breakdown for a ${genre} film of ${length} length.
-Total estimated budget: $${total}
+You are a professional film production accountant. Generate a REALISTIC, DETAILED budget breakdown for a ${genre} film of ${length} length.
+
+Total estimated budget: $${total.toLocaleString()}
+Budget mode: ${lowBudgetMode ? "LOW BUDGET (indie/guerrilla)" : "STANDARD (indie professional)"}
+
 Return JSON:
 {
   "categories": [
     {
-      "name": "...",
-      "amount": number,
-      "percentage": number,
-      "items": [{"name":"...","cost": number}],
-      "tips": ["..."],
-      "alternatives": ["..."]
+      "name": "Category Name",
+      "amount": number (USD, must be realistic),
+      "percentage": number (all must sum to ~100),
+      "items": [{"name": "Specific line item", "cost": number}],
+      "tips": ["Practical cost-saving tip"],
+      "alternatives": ["Cheaper alternative approach"]
     }
   ]
 }
-Rules:
-- category amounts must roughly sum to total budget
-- percentages should total ~100
-- be realistic for indie film production
+
+REQUIRED CATEGORIES (include ALL):
+1. Pre-Production (script, storyboard, location scouting, permits)
+2. Cast & Talent (actors, extras, casting director)
+3. Crew (director, DP, gaffer, grip, sound, PA)
+4. Locations & Set Design (rental, permits, set dressing, props)
+5. Camera & Equipment (camera, lenses, lighting, grip, sound gear)
+6. Post-Production (editing, color grading, VFX, DIT)
+7. Music & Sound Design (composer, sound mix, foley, licensing)
+8. Insurance & Legal (E&O, liability, contracts)
+9. Marketing & Distribution (poster, trailer, festival submissions)
+10. Contingency & Miscellaneous (10% buffer, petty cash, transport)
+
+RULES:
+- ALL category amounts MUST sum to exactly $${total.toLocaleString()}
+- Percentages must total 100
+- Each item must have a realistic cost that sums to category amount
+- ${lowBudgetMode ? "Include practical cost-saving tips and cheap alternatives for EVERY category" : "Tips and alternatives can be general guidance"}
+- Be specific: "RED Komodo rental 5 days @ $350/day" not just "camera rental"
 `.trim();
   const res = await callOpenAIJsonSchema<{ categories: any[] }>(prompt, buildBudgetSchema(), {
     temperature: 0.25,
-    max_tokens: 2600,
+    max_tokens: 6000,
     request_tag: "budget",
     schema_name: "Budget",
     model: MODEL_JSON_RAW,
@@ -2474,36 +2493,45 @@ A ${genre || "generic"} film featuring a protagonist navigating several dramatic
 `.trim();
   const usedScript = script && script.trim().length > 0 ? script : fallbackScript;
   const prompt = `
-You are a professional film location scout.
-Analyze the following film script and extract ALL distinct filming locations based on scene headings and descriptions.
+You are a professional film location scout and production designer.
+Analyze the following ${genre} film script and extract ALL distinct filming locations.
+
 SCRIPT:
 """START_SCRIPT"""
-${tail(usedScript, 22000)}
+${tail(usedScript, 20000)}
 """END_SCRIPT"""
+
 Return JSON:
 {
   "locations": [
     {
-      "name": "...",
-      "type": "Interior|Exterior",
-      "description": "...",
-      "mood": "...",
-      "colorPalette": "...",
-      "propsOrFeatures": ["..."],
-      "scenes": ["..."],
-      "rating": 1-5,
-      "lowBudgetTips": "...",
-      "highBudgetOpportunities": "..."
+      "name": "Specific location name from script (e.g. 'Marcus's Apartment', 'Downtown Alley')",
+      "type": "Interior" or "Exterior",
+      "description": "2-3 sentences: what this location looks like, key visual elements, atmosphere",
+      "mood": "Emotional tone (e.g. 'Tense and claustrophobic', 'Serene but foreboding')",
+      "colorPalette": "Dominant colors for this location (e.g. 'Cool blues, steel grays, neon green accents')",
+      "propsOrFeatures": ["Specific prop or set feature needed"],
+      "scenes": ["Scene heading where this location appears"],
+      "rating": 1-5 (production complexity: 1=simple, 5=complex),
+      "lowBudgetTips": "How to achieve this on a micro budget",
+      "highBudgetOpportunities": "What you'd add with more resources"
     }
   ]
 }
-Rules:
-- Use only actual location names from scene headings (do not invent generic names).
-- Never leave any field blank.
+
+RULES:
+- Extract EVERY distinct location from script scene headings (INT./EXT.)
+- Use the ACTUAL location names from the script, not generic placeholders
+- "type" must be exactly "Interior" or "Exterior" (if INT/EXT use "Interior")
+- "description" must be vivid and specific to THIS location, not generic
+- "propsOrFeatures" must list concrete items (furniture, signage, vehicles, etc.)
+- "scenes" must reference actual scene headings from the script
+- "rating" reflects how hard this is to find/build (1=easy, 5=very complex)
+- Never leave any field blank or generic
 `.trim();
   const res = await callOpenAIJsonSchema<{ locations: any[] }>(prompt, buildLocationsSchema(), {
     temperature: 0.35,
-    max_tokens: 3200,
+    max_tokens: 6000,
     request_tag: "locations",
     schema_name: "Locations",
     model: MODEL_JSON_RAW,

@@ -43,8 +43,6 @@ export default function LocationsPage() {
       updateFilmPackage({
         locations: data.locations || [],
       });
-
-      alert("Locations generated successfully!");
     } catch (error) {
       console.error("Failed to generate locations:", error);
       alert("An error occurred while generating locations.");

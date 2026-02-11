@@ -1,9 +1,8 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import {
   DollarSign,
-  Plus,
   TrendingUp,
   Calculator,
   Loader2,
@@ -12,24 +11,25 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-
-interface BudgetCategory {
-  name: string;
-  amount: number;
-  percentage: number;
-  items?: string[];
-  tips?: string[];
-  alternatives?: string[];
-}
+import { useFilmStore } from "@/lib/store";
+import type { BudgetCategory, BudgetItem } from "@/lib/store";
 
 export default function BudgetPage() {
-  const [budget, setBudget] = useState<BudgetCategory[]>([]);
+  const { filmPackage, updateFilmPackage } = useFilmStore();
   const [loading, setLoading] = useState(false);
   const [lowBudgetMode, setLowBudgetMode] = useState(false);
-  const [days, setDays] = useState(5);
+  const [error, setError] = useState<string | null>(null);
+
+  const budget: BudgetCategory[] = filmPackage?.budget || [];
 
   const handleGenerateBudget = async () => {
+    if (!filmPackage?.genre || !filmPackage?.length) {
+      alert("Please generate a script first from the Create tab.");
+      return;
+    }
+
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch("/api/budget", {
         method: "POST",
@@ -37,50 +37,38 @@ export default function BudgetPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          movieGenre: "Psychological Thriller",
-          scriptLength: "10 min",
-          lowBudgetMode, // optionally send low-budget preference
+          movieGenre: filmPackage.genre,
+          scriptLength: filmPackage.length,
+          lowBudgetMode,
         }),
       });
 
       if (!res.ok) {
-        const errorData = await res.json();
-        console.error(errorData);
-        alert("Failed to generate budget.");
-        return;
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData?.error || "Failed to generate budget.");
       }
 
       const data = await res.json();
-      console.log("Budget result:", data);
 
-      if (data.categories) {
-        setBudget(data.categories);
+      if (data.categories && Array.isArray(data.categories)) {
+        updateFilmPackage({ budget: data.categories });
       } else {
-        alert("No budget data returned from API.");
+        throw new Error("No budget data returned from API.");
       }
-    } catch (error) {
-      console.error("Failed to generate budget:", error);
-      alert("An error occurred while generating the budget.");
+    } catch (err: any) {
+      console.error("Failed to generate budget:", err);
+      setError(err?.message || "An error occurred while generating the budget.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Optionally reduce budget amounts in low-budget mode
-  const adjustedBudget = useMemo(() => {
-    if (!lowBudgetMode) return budget;
-    return budget.map((cat) => ({
-      ...cat,
-      amount: Math.round(cat.amount * 0.5),
-    }));
-  }, [budget, lowBudgetMode]);
-
-  const totalBudget = adjustedBudget.reduce(
+  const totalBudget = budget.reduce(
     (sum, category) => sum + category.amount,
     0
   );
 
-  const largestCategory = adjustedBudget.reduce(
+  const largestCategory = budget.reduce(
     (max, cat) => (cat.amount > max.amount ? cat : max),
     { name: "-", amount: 0, percentage: 0 }
   );
@@ -108,36 +96,41 @@ export default function BudgetPage() {
               </p>
             </div>
 
+            {error && (
+              <div className="text-red-400 text-center p-3 bg-red-400/10 rounded-lg mb-4">
+                {error}
+              </div>
+            )}
+
             <Card className="glass-effect border-[#FF6A00]/20 p-8 text-center">
               <h3 className="text-xl font-semibold text-white mb-4">
                 No Budget Yet
               </h3>
-              <p className="text-[#B2C8C9] mb-6">
-                Generate a professional film budget or create a custom plan
+              <p className="text-[#B2C8C9] mb-4">
+                Generate a professional film budget based on your script
               </p>
-              <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                <Button
-                  onClick={handleGenerateBudget}
-                  disabled={loading}
-                  className="bg-[#FF6A00] hover:bg-[#E55A00] text-white"
-                >
-                  {loading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Generating...
-                    </>
-                  ) : (
-                    "Generate Budget"
-                  )}
-                </Button>
-                <Button
-                  variant="outline"
-                  className="border-[#FF6A00] text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white"
-                >
-                  <Plus className="w-4 h-4 mr-2" />
-                  Create Custom
-                </Button>
+              <div className="flex items-center justify-center space-x-2 mb-6">
+                <Sparkles className="w-4 h-4 text-[#FF6A00]" />
+                <span className="text-[#B2C8C9] text-sm">Low Budget Mode:</span>
+                <Switch
+                  checked={lowBudgetMode}
+                  onCheckedChange={setLowBudgetMode}
+                />
               </div>
+              <Button
+                onClick={handleGenerateBudget}
+                disabled={loading}
+                className="bg-[#FF6A00] hover:bg-[#E55A00] text-white"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  "Generate Budget"
+                )}
+              </Button>
             </Card>
           </div>
         </div>
@@ -160,14 +153,6 @@ export default function BudgetPage() {
               </p>
             </div>
             <div className="flex items-center space-x-4 mt-4 md:mt-0">
-              <div className="flex items-center space-x-2">
-                <Sparkles className="w-5 h-5 text-[#FF6A00]" />
-                <span className="text-[#B2C8C9] text-sm">Low Budget Mode:</span>
-                <Switch
-                  checked={lowBudgetMode}
-                  onCheckedChange={setLowBudgetMode}
-                />
-              </div>
               <div className="text-right">
                 <div className="text-2xl font-bold text-[#FF6A00]">
                   {formatCurrency(totalBudget)}
@@ -176,6 +161,12 @@ export default function BudgetPage() {
               </div>
             </div>
           </div>
+
+          {error && (
+            <div className="text-red-400 text-center p-3 bg-red-400/10 rounded-lg mb-4">
+              {error}
+            </div>
+          )}
 
           {/* Budget Overview Cards */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
@@ -201,7 +192,7 @@ export default function BudgetPage() {
                 <div>
                   <p className="text-[#8da3a4] text-sm">Categories</p>
                   <p className="text-white text-xl font-bold">
-                    {adjustedBudget.length}
+                    {budget.length}
                   </p>
                 </div>
               </div>
@@ -215,8 +206,7 @@ export default function BudgetPage() {
                 <div>
                   <p className="text-[#8da3a4] text-sm">Largest Category</p>
                   <p className="text-white text-xl font-bold">
-                    {largestCategory.name} (
-                    {largestCategory.percentage}%)
+                    {largestCategory.name} ({largestCategory.percentage}%)
                   </p>
                 </div>
               </div>
@@ -228,9 +218,9 @@ export default function BudgetPage() {
                   <DollarSign className="w-6 h-6 text-purple-400" />
                 </div>
                 <div>
-                  <p className="text-[#8da3a4] text-sm">Per Day Estimate</p>
-                  <p className="text-white text-xl font-bold">
-                    {formatCurrency(totalBudget / days)}
+                  <p className="text-[#8da3a4] text-sm">Genre / Length</p>
+                  <p className="text-white text-sm font-bold">
+                    {filmPackage?.genre || "—"} / {filmPackage?.length || "—"}
                   </p>
                 </div>
               </div>
@@ -239,7 +229,7 @@ export default function BudgetPage() {
 
           {/* Budget Categories */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {adjustedBudget.map((category, index) => (
+            {budget.map((category, index) => (
               <Card
                 key={index}
                 className="glass-effect border-[#FF6A00]/20 p-6 hover-lift"
@@ -261,52 +251,56 @@ export default function BudgetPage() {
                 <div className="w-full bg-[#032f30] rounded-full h-3 mb-4">
                   <div
                     className="bg-[#FF6A00] h-3 rounded-full transition-all duration-300"
-                    style={{ width: `${category.percentage}%` }}
+                    style={{ width: `${Math.min(category.percentage, 100)}%` }}
                   />
                 </div>
 
-                {category.items && (
-                  <div>
-                    <p className="text-sm text-[#8da3a4] mb-2">Includes:</p>
-                    <div className="flex flex-wrap gap-1">
+                {category.items && category.items.length > 0 && (
+                  <div className="mb-3">
+                    <p className="text-sm text-[#8da3a4] mb-2">Line Items:</p>
+                    <div className="space-y-1">
                       {category.items.map((item, i) => (
-                        <span
+                        <div
                           key={i}
-                          className="text-xs bg-[#032f30] text-[#B2C8C9] px-2 py-1 rounded"
+                          className="flex items-center justify-between text-xs bg-[#032f30] text-[#B2C8C9] px-2 py-1.5 rounded"
                         >
-                          {item}
-                        </span>
+                          <span>{typeof item === "object" ? item.name : String(item)}</span>
+                          {typeof item === "object" && typeof item.cost === "number" && (
+                            <span className="text-[#FF6A00] font-mono ml-2">
+                              {formatCurrency(item.cost)}
+                            </span>
+                          )}
+                        </div>
                       ))}
                     </div>
                   </div>
                 )}
 
-   {category.tips && category.tips.length > 0 && (
-  <div className="mt-4">
-    <h4 className="text-[#FF6A00] font-bold mb-2">
-      Cost-Saving Tips:
-    </h4>
-    <ul className="list-disc list-inside text-[#B2C8C9] text-sm">
-      {category.tips?.map((tip, i) => (
-        <li key={i}>{tip}</li>
-      ))}
-    </ul>
-  </div>
-)}
+                {category.tips && category.tips.length > 0 && (
+                  <div className="mt-4">
+                    <h4 className="text-[#FF6A00] font-bold text-sm mb-2">
+                      Cost-Saving Tips:
+                    </h4>
+                    <ul className="list-disc list-inside text-[#B2C8C9] text-sm">
+                      {category.tips.map((tip, i) => (
+                        <li key={i}>{tip}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
 
-{category.alternatives && category.alternatives.length > 0 && (
-  <div className="mt-4">
-    <h4 className="text-[#FF6A00] font-bold mb-2">
-      Low-Cost Alternatives:
-    </h4>
-    <ul className="list-disc list-inside text-[#B2C8C9] text-sm">
-      {category.alternatives?.map((alt, i) => (
-        <li key={i}>{alt}</li>
-      ))}
-    </ul>
-  </div>
-)}
-
+                {category.alternatives && category.alternatives.length > 0 && (
+                  <div className="mt-4">
+                    <h4 className="text-[#FF6A00] font-bold text-sm mb-2">
+                      Low-Cost Alternatives:
+                    </h4>
+                    <ul className="list-disc list-inside text-[#B2C8C9] text-sm">
+                      {category.alternatives.map((alt, i) => (
+                        <li key={i}>{alt}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </Card>
             ))}
           </div>
