@@ -19,21 +19,21 @@ export const subscriptionProducts = async (): Promise<SubscriptionProduct[]> => 
       title: "Lifetime Pro Suite",
       description:
         "All future upgrades free, full access to Pro Suite, priority support, and exclusive tools.",
-      price: "$199.00",
+      price: "$399.00",
       period: "One-time",
     },
     {
       identifier: "price_1Ras6nIgN98dwGnNS4Zazdux",
       title: "Yearly Pro",
       description: "Full Pro features. Save 20% vs monthly.",
-      price: "$38.30",
+      price: "$115.10",
       period: "Yearly",
     },
     {
       identifier: "price_1Ras0gIgN98dwGnNFn2dMyFO",
       title: "Monthly Pro",
       description: "Full Pro features. Cancel anytime.",
-      price: "$3.99",
+      price: "$11.99",
       period: "Monthly",
     },
   ];
