@@ -9,9 +9,11 @@ import {
   Loader2,
   Download
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import EmptyState from "@/components/EmptyState";
 import { useFilmStore } from "@/lib/store";
 
 interface SoundAsset {
@@ -44,7 +46,7 @@ export default function SoundPage() {
 
   const handleGenerateSound = async () => {
     if (!filmPackage?.script || !filmPackage?.genre) {
-      alert("Please generate a script first from the Create tab.");
+      toast.error("Please generate a script first from the Create tab.");
       return;
     }
 
@@ -85,7 +87,7 @@ export default function SoundPage() {
 
   const handleDownloadSoundAssets = async () => {
     if (soundAssets.length === 0) {
-      alert("No sound assets to download. Please generate sound design first.");
+      toast.error("No sound assets to download. Please generate sound design first.");
       return;
     }
 
@@ -115,10 +117,10 @@ export default function SoundPage() {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
 
-      alert("✅ Sound design package downloaded successfully!");
+      toast.success("Sound design package downloaded successfully");
     } catch (error: any) {
       console.error("Failed to download sound assets:", error);
-      alert("Failed to download. Please check that audio files are available.");
+      toast.error("Failed to download. Please check that audio files are available.");
     } finally {
       setLoading(false);
     }
@@ -157,47 +159,21 @@ export default function SoundPage() {
   };
 
   if (soundAssets.length === 0) {
+    const hasScript = !!filmPackage?.script;
     return (
-      <div className="min-h-screen cinematic-gradient">
-        <div className="container mx-auto px-4 py-12">
-          <div className="max-w-4xl mx-auto">
-            <div className="text-center mb-8">
-              <Music className="w-16 h-16 text-[#FF6A00] mx-auto mb-4" />
-              <h1 className="text-3xl font-bold text-white mb-2">Sound Library</h1>
-              <p className="text-[#B2C8C9]">
-                Manage music, sound effects, and audio assets
-              </p>
-            </div>
-
-            {error && (
-              <div className="text-red-400 text-center p-3 bg-red-400/10 rounded-lg mb-4">
-                {error}
-              </div>
-            )}
-
-            <Card className="glass-effect border-[#FF6A00]/20 p-8 text-center">
-              <h3 className="text-xl font-semibold text-white mb-4">No Sound Assets Yet</h3>
-              <p className="text-[#B2C8C9] mb-6">
-                Generate sound recommendations based on your script or add assets manually.
-              </p>
-              <Button
-                onClick={handleGenerateSound}
-                disabled={loading}
-                className="bg-[#FF6A00] hover:bg-[#E55A00] text-white"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Generating...
-                  </>
-                ) : (
-                  "Generate Sound Design"
-                )}
-              </Button>
-            </Card>
-          </div>
-        </div>
-      </div>
+      <EmptyState
+        icon={Music}
+        title="Sound Library"
+        subtitle="Original music, ambient tracks, and sound effects for your film"
+        emptyTitle="No sound assets yet"
+        emptyDescription="Generate original cinematic music, ambient atmospheres, and sound effects tailored to your script's scenes and emotional beats."
+        needsPrerequisite={!hasScript}
+        prerequisiteMessage="Generate a script first — sound design is composed from your scenes and genre."
+        actionLabel="Generate Sound Design"
+        actionLoadingLabel="Composing soundtrack..."
+        onAction={handleGenerateSound}
+        loading={loading}
+      />
     );
   }
 

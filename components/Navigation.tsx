@@ -14,19 +14,33 @@ import {
   MapPin,
   Music,
   Download,
-  Clapperboard
+  Clapperboard,
+  FolderKanban,
+  Camera,
+  BookOpen,
+  Megaphone,
+  Rocket,
+  Mic,
+  Palette
 } from 'lucide-react';
 
 const navItems = [
+  { href: '/projects', label: 'Projects', icon: FolderKanban },
   { href: '/', label: 'Create', icon: Film },
   { href: '/script', label: 'Script', icon: FileText },
   { href: '/concept', label: 'Concept', icon: Lightbulb },
   { href: '/characters', label: 'Characters', icon: Users },
   { href: '/storyboard', label: 'Storyboard', icon: Image },
+  { href: '/shotlist', label: 'Shot List', icon: Camera },
   { href: '/budget', label: 'Budget', icon: DollarSign },
   { href: '/schedule', label: 'Schedule', icon: Calendar },
   { href: '/locations', label: 'Locations', icon: MapPin },
   { href: '/sound', label: 'Sound', icon: Music },
+  { href: '/pitch-deck', label: 'Pitch Deck', icon: BookOpen },
+  { href: '/vision-board', label: 'Vision Board', icon: Palette },
+  { href: '/table-read', label: 'Table Read', icon: Mic },
+  { href: '/social', label: 'Social', icon: Megaphone },
+  { href: '/distribution', label: 'Distribution', icon: Rocket },
   { href: '/export', label: 'Export', icon: Download },
 ];
 

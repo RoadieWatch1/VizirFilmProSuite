@@ -8,9 +8,11 @@ import {
   Loader2,
   Sparkles,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
+import EmptyState from "@/components/EmptyState";
 import { useFilmStore } from "@/lib/store";
 import type { BudgetCategory, BudgetItem } from "@/lib/store";
 
@@ -24,7 +26,7 @@ export default function BudgetPage() {
 
   const handleGenerateBudget = async () => {
     if (!filmPackage?.genre || !filmPackage?.length) {
-      alert("Please generate a script first from the Create tab.");
+      toast.error("Please generate a script first from the Create tab.");
       return;
     }
 
@@ -82,59 +84,31 @@ export default function BudgetPage() {
   };
 
   if (budget.length === 0) {
+    const hasPrereqs = !!(filmPackage?.genre && filmPackage?.length);
     return (
-      <div className="min-h-screen cinematic-gradient">
-        <div className="container mx-auto px-4 py-12">
-          <div className="max-w-4xl mx-auto">
-            <div className="text-center mb-8">
-              <DollarSign className="w-16 h-16 text-[#FF6A00] mx-auto mb-4" />
-              <h1 className="text-3xl font-bold text-white mb-2">
-                Budget Management
-              </h1>
-              <p className="text-[#B2C8C9]">
-                Track production costs and discover ways to save
-              </p>
-            </div>
-
-            {error && (
-              <div className="text-red-400 text-center p-3 bg-red-400/10 rounded-lg mb-4">
-                {error}
-              </div>
-            )}
-
-            <Card className="glass-effect border-[#FF6A00]/20 p-8 text-center">
-              <h3 className="text-xl font-semibold text-white mb-4">
-                No Budget Yet
-              </h3>
-              <p className="text-[#B2C8C9] mb-4">
-                Generate a professional film budget based on your script
-              </p>
-              <div className="flex items-center justify-center space-x-2 mb-6">
-                <Sparkles className="w-4 h-4 text-[#FF6A00]" />
-                <span className="text-[#B2C8C9] text-sm">Low Budget Mode:</span>
-                <Switch
-                  checked={lowBudgetMode}
-                  onCheckedChange={setLowBudgetMode}
-                />
-              </div>
-              <Button
-                onClick={handleGenerateBudget}
-                disabled={loading}
-                className="bg-[#FF6A00] hover:bg-[#E55A00] text-white"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Generating...
-                  </>
-                ) : (
-                  "Generate Budget"
-                )}
-              </Button>
-            </Card>
+      <EmptyState
+        icon={DollarSign}
+        title="Budget Breakdown"
+        subtitle="Professional budgeting calibrated to your genre and length"
+        emptyTitle="No budget yet"
+        emptyDescription="Generate a line-item budget with department categories, cost-saving tips, and low-budget alternatives tailored to your production."
+        needsPrerequisite={!hasPrereqs}
+        prerequisiteMessage="Set your genre and length on the Create tab so your budget can be calibrated realistically."
+        actionLabel="Generate Budget"
+        actionLoadingLabel="Calculating budget..."
+        onAction={handleGenerateBudget}
+        loading={loading}
+        extra={
+          <div className="flex items-center justify-center space-x-2">
+            <Sparkles className="w-4 h-4 text-[#FF6A00]" />
+            <span className="text-[#B2C8C9] text-sm">Low Budget Mode:</span>
+            <Switch
+              checked={lowBudgetMode}
+              onCheckedChange={setLowBudgetMode}
+            />
           </div>
-        </div>
-      </div>
+        }
+      />
     );
   }
 

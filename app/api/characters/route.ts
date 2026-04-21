@@ -1,7 +1,7 @@
 // C:\Users\vizir\VizirPro\app\api\characters\route.ts
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
-import { generateCharacters } from "@/lib/generators";
+import { generateCharacters, generateCastingSuggestions } from "@/lib/generators";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -22,7 +22,7 @@ function getOpenAI(): OpenAI {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { step, character, scriptContent, genre } = body;
+    const { step, character, scriptContent, genre, title, logline, synopsis, themes } = body;
 
     if (step === "generate-characters") {
       if (!scriptContent || !genre) {
@@ -77,6 +77,38 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           { error: err?.message || "Failed to generate portrait." },
           { status: 500 }
+        );
+      }
+    }
+
+    if (step === "generate-casting") {
+      if (!character || !character.name) {
+        return NextResponse.json(
+          { error: "Character data is required to generate casting suggestions." },
+          { status: 400 },
+        );
+      }
+
+      try {
+        const casting = await generateCastingSuggestions(character, {
+          genre,
+          title,
+          logline,
+          synopsis,
+          themes: Array.isArray(themes) ? themes.filter((t: any) => typeof t === "string") : [],
+        });
+        if (!casting) {
+          return NextResponse.json(
+            { error: "Casting generation returned no data. Try again." },
+            { status: 502 },
+          );
+        }
+        return NextResponse.json({ casting });
+      } catch (err: any) {
+        console.error("Casting generation failed:", err);
+        return NextResponse.json(
+          { error: err?.message || "Failed to generate casting suggestions." },
+          { status: 500 },
         );
       }
     }

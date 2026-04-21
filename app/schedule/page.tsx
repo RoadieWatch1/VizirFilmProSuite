@@ -5,6 +5,7 @@ import { Calendar, Plus, Clock, MapPin, Users, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import EmptyState from "@/components/EmptyState";
 import { useFilmStore } from "@/lib/store";
 
 export default function SchedulePage() {
@@ -60,60 +61,21 @@ export default function SchedulePage() {
   );
 
   if (schedule.length === 0) {
+    const hasScript = !!filmPackage?.script;
     return (
-      <div className="min-h-screen cinematic-gradient">
-        <div className="container mx-auto px-4 py-12">
-          <div className="max-w-4xl mx-auto">
-            <div className="text-center mb-8">
-              <Calendar className="w-16 h-16 text-[#FF6A00] mx-auto mb-4" />
-              <h1 className="text-3xl font-bold text-white mb-2">
-                Production Schedule
-              </h1>
-              <p className="text-[#B2C8C9]">
-                Plan your shooting schedule and timeline
-              </p>
-            </div>
-
-            {error && (
-              <div className="text-red-400 text-center p-3 bg-red-400/10 rounded-lg mb-4">
-                {error}
-              </div>
-            )}
-
-            <Card className="glass-effect border-[#FF6A00]/20 p-8 text-center">
-              <h3 className="text-xl font-semibold text-white mb-4">
-                No Schedule Yet
-              </h3>
-              <p className="text-[#B2C8C9] mb-6">
-                Generate a professional production schedule based on your script.
-              </p>
-              <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                <Button
-                  onClick={handleGenerateSchedule}
-                  disabled={loading}
-                  className="bg-[#FF6A00] hover:bg-[#E55A00] text-white"
-                >
-                  {loading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Generating...
-                    </>
-                  ) : (
-                    "Generate Schedule"
-                  )}
-                </Button>
-                <Button
-                  variant="outline"
-                  className="border-[#FF6A00] text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white"
-                >
-                  <Plus className="w-4 h-4 mr-2" />
-                  Add Day
-                </Button>
-              </div>
-            </Card>
-          </div>
-        </div>
-      </div>
+      <EmptyState
+        icon={Calendar}
+        title="Production Schedule"
+        subtitle="Build a realistic shoot calendar day-by-day"
+        emptyTitle="No schedule yet"
+        emptyDescription="Generate a shoot-day timeline with activities, crew counts, and location grouping based on your script."
+        needsPrerequisite={!hasScript}
+        prerequisiteMessage="Generate a script first — the schedule is built scene-by-scene from your screenplay."
+        actionLabel="Generate Schedule"
+        actionLoadingLabel="Building schedule..."
+        onAction={handleGenerateSchedule}
+        loading={loading}
+      />
     );
   }
 

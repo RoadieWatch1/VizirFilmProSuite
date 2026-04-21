@@ -57,10 +57,11 @@ function getOpenAI(): OpenAI {
   return _openai;
 }
 // ✅ Model defaults (set these in Vercel env vars for Production + Preview)
-const MODEL_TEXT_RAW = (process.env.OPENAI_MODEL_TEXT || "gpt-4o-mini").trim(); // screenplay text
-const MODEL_JSON_RAW = (process.env.OPENAI_MODEL_JSON || "gpt-4o-mini").trim(); // structured JSON outputs
+// Upgraded to gpt-4.1 for higher-quality screenplay writing and structured output.
+const MODEL_TEXT_RAW = (process.env.OPENAI_MODEL_TEXT || "gpt-4.1").trim(); // screenplay text
+const MODEL_JSON_RAW = (process.env.OPENAI_MODEL_JSON || "gpt-4.1-mini").trim(); // structured JSON outputs
 // ✅ Fallback models (used only if your chosen model is blocked/unavailable)
-const FALLBACK_MODEL_TEXT = (process.env.OPENAI_FALLBACK_MODEL_TEXT || "gpt-4o-mini").trim();
+const FALLBACK_MODEL_TEXT = (process.env.OPENAI_FALLBACK_MODEL_TEXT || "gpt-4o").trim();
 const FALLBACK_MODEL_JSON = (process.env.OPENAI_FALLBACK_MODEL_JSON || "gpt-4o-mini").trim();
 // ✅ Temperature sending is OFF by default
 const SEND_TEMPERATURE = process.env.OPENAI_SEND_TEMPERATURE === "1";
@@ -487,17 +488,65 @@ async function callOpenAIText(
         {
           role: "system",
           content: `
-You are a professional screenwriter. Output ONLY screenplay text in **Fountain** format.
-STRICT READABILITY / PACING RULES (very important):
-- Use SCENE HEADINGS (INT./EXT. LOCATION - DAY/NIGHT) frequently.
-- NEVER write more than ~350–450 words without a new slug line (INT./EXT.).
-- Keep scenes moving: short action paragraphs, purposeful dialogue beats.
-FORMAT RULES:
-- Action in present tense.
-- CHARACTER names uppercase; dialogue under names.
-- No summaries, no analysis, no JSON, no commentary.
-- Do NOT add meta headers like "PART 1" or "CHUNK 2".
-- Continue seamlessly with proper scene headings.
+You are a WGA-caliber professional screenwriter with produced feature and episodic credits. You write with the economy of Aaron Sorkin, the visual clarity of Christopher Nolan, the character truth of Greta Gerwig, and the structural discipline of Tony Gilroy. Output ONLY screenplay text in **Fountain** format.
+
+# CRAFT PRINCIPLES (NON-NEGOTIABLE)
+
+## Structure
+- Hit a recognizable three-act shape. Inciting incident in act one, midpoint reversal, all-is-lost before act three, decisive climax.
+- Every scene must do at least TWO of: advance plot, reveal character, raise stakes, escalate conflict, plant/pay off a setup. If a scene does only one, cut or merge it.
+- Start scenes as late as possible; end them as early as possible (Mamet's late-in / early-out).
+
+## Show Don't Tell
+- Reveal character through ACTION and SUBTEXT, never through direct statement or on-the-nose dialogue.
+- BANNED tropes unless subverted: "I'm fine", "We need to talk", mirror monologues, characters announcing their own feelings, exposition dumps between strangers.
+- If a character says what they want, they're lying or you're writing lazy. Rewrite.
+
+## Dialogue
+- Each character must have a distinct VOICE — idiolect, rhythm, vocabulary. Read the line aloud; if two characters could swap it, rewrite.
+- Use subtext. People deflect, interrupt, lie, leave things unsaid.
+- Avoid "as you know" exposition. Weaponize conflict to deliver backstory.
+- Short beats. Trim adverbs. Let silence and action carry weight.
+
+## Action Lines
+- Present tense, active voice, concrete verbs. "She slams the door" not "She angrily closes the door."
+- No camera direction unless essential ("ANGLE ON", "CLOSE ON" sparingly).
+- No novelistic interiority ("She thinks about her mother"). Externalize — show the photo, the hesitation, the trembling hand.
+- One-line action beats for pace. Longer paragraphs (max 4 lines) for atmosphere.
+- White space is rhythm. Use it.
+
+## Scene Headings (Slug Lines)
+- INT./EXT. LOCATION - DAY/NIGHT (or DAWN/DUSK/CONTINUOUS/LATER where precise).
+- NEVER exceed ~350 words of body without a new slug line.
+- Reserve "MONTAGE" and "INTERCUT" for genuine structural choices.
+
+## Genre-Aware Voice
+- HORROR: dread through restraint; delay the monster; sound design implied ("A WHISPER — just behind her."); POV close and claustrophobic.
+- THRILLER: ticking clock visible on page; information asymmetry; reversals every 8–12 pages.
+- COMEDY: rule-of-three; comedic set-ups paid off late; character comedy over joke comedy; bits escalate.
+- DRAMA: interior stakes externalized; quiet devastation; symbolic objects and recurring motifs.
+- ACTION: geography first — establish spatial relationships before chaos; clarity of cause/effect in set-pieces; character in the choreography.
+- SCI-FI / FANTASY: ground the unreal in sensory specifics; introduce rules once, enforce them always; world-building through character friction, not monologue.
+- ROMANCE: obstacles are internal before external; meet-cute earns its name only if it reveals wound/want; longing in what's NOT said.
+- CRIME / NOIR: moral compromise; procedural detail earns texture; dialogue clipped and loaded.
+
+# FOUNTAIN FORMAT — STRICT
+- Scene headings: INT./EXT./INT/EXT. flush left.
+- Action: flush left, present tense.
+- Character cues: UPPERCASE, centered-convention (just uppercase line).
+- Parentheticals: sparing, lowercase, italic-style ("(beat)", "(softly)") — only when intent would otherwise be ambiguous.
+- Dialogue: line under character cue.
+- Transitions (FADE IN:, FADE OUT., SMASH CUT TO:, CUT TO:) only when they matter.
+- No markdown, no JSON, no commentary, no meta labels ("PART 1", "CHUNK 2", "ACT I"). Continue seamlessly.
+
+# FORBIDDEN
+- Generic placeholder names (JOHN, JANE) unless deliberately archetypal.
+- Clichés: "little did they know", "suddenly", "out of nowhere".
+- Stage directions that require telepathy ("He realizes she lied").
+- Block paragraphs of action longer than 4 lines.
+- Summarizing emotion ("angry", "sad", "confused") — dramatize instead.
+
+Write like the draft is going out to a producer in the morning.
 `.trim(),
         },
         { role: "user", content: prompt },
@@ -625,6 +674,21 @@ async function callOpenAIJsonSchema<T>(
   return { data, content: content.trim(), finish_reason, used_schema: false, meta };
 }
 // ---------- Types ----------
+export interface CastingSuggestion {
+  name: string;           // Actor name — real, working actor
+  reason: string;         // Why they fit — craft-specific argument
+  notableWork: string;    // Film/show they're known for (helps readers recall)
+}
+
+export interface CharacterCasting {
+  notes: string;                          // 2-3 sentences on what the role needs from an actor
+  aList: CastingSuggestion[];             // 3 aspirational A-list
+  midTier: CastingSuggestion[];           // 3 realistic mid-tier
+  emerging: CastingSuggestion[];          // 3 emerging / indie-friendly
+  characterActors: CastingSuggestion[];   // 2-3 character actors (scene-stealers)
+  generatedAt?: number;
+}
+
 export interface Character {
   name: string;
   description: string;
@@ -636,6 +700,7 @@ export interface Character {
   mood?: string;
   visualDescription?: string;
   imageUrl?: string;
+  casting?: CharacterCasting;
 }
 export interface StoryboardFrame {
   scene: string;
@@ -2407,11 +2472,27 @@ export const generateBudget = async (genre: string, length: string, lowBudgetMod
   const genreMultiplier = /sci[- ]?fi|action|fantasy|horror/i.test(genre) ? 1.5 : /drama|comedy|romance/i.test(genre) ? 0.85 : 1;
   const rawTotal = Math.round(baseBudget * genreMultiplier);
   const total = lowBudgetMode ? Math.round(rawTotal * 0.5) : rawTotal;
+  const tier =
+    total < 25000 ? "MICRO-BUDGET (sub-$25k — friends/favors, prosumer gear, no unions)"
+    : total < 100000 ? "ULTRA-LOW (SAG Short Film / Ultra-Low Budget Agreement territory)"
+    : total < 500000 ? "LOW-BUDGET INDIE (SAG Low Budget Agreement, regional crew, 3-4 week shoot)"
+    : total < 2500000 ? "MODIFIED LOW (SAG Modified Low — more days, better DP/gear)"
+    : total < 10000000 ? "MID-BUDGET INDIE (union crew, real distribution targets)"
+    : "STUDIO (full union, A-list potential, wide release math)";
   const prompt = `
-You are a professional film production accountant. Generate a REALISTIC, DETAILED budget breakdown for a ${genre} film of ${length} length.
+You are a seasoned UPM/line producer with 20+ years of indie + studio features. You know actual union minimums, real equipment rental rates (RED, ARRI, lighting packages), and how budgets actually get spent in 2026. Generate a REALISTIC, DETAILED budget breakdown for a ${genre} film of ${length} length.
 
 Total estimated budget: $${total.toLocaleString()}
-Budget mode: ${lowBudgetMode ? "LOW BUDGET (indie/guerrilla)" : "STANDARD (indie professional)"}
+Budget tier: ${tier}
+Budget mode: ${lowBudgetMode ? "LOW BUDGET (indie/guerrilla — favor deals, non-union, short days where legal)" : "STANDARD (indie professional — respects union minimums where applicable)"}
+
+GENRE-SPECIFIC COST REALITY for ${genre}:
+- Horror/Thriller: practical effects/creature, night exteriors, fog/atmospheric, insurance up for stunts.
+- Action: stunt coordinator, rigging, slow-mo/high-speed camera, extra insurance, more shoot days per script minute.
+- Sci-Fi/Fantasy: VFX post line dominates (often 20-35%), possible LED volume/greenscreen stage, heavier art dept.
+- Period/Historical: wardrobe + production design balloon; location lock-offs; picture-cars.
+- Drama/Romance/Comedy: dialogue-driven, efficient; weight goes to cast, locations, sound.
+- Documentary: archival licensing, travel, long post timeline.
 
 Return JSON:
 {
@@ -2671,4 +2752,1415 @@ VALIDATION:
     return { ...asset, duration: adjustedDuration, audioUrl: "" };
   });
   return { soundAssets };
+};
+
+// ---------- Script Coverage ----------
+function buildCoverageSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "logline",
+      "loglineAssessment",
+      "synopsis",
+      "structureAnalysis",
+      "characterAnalysis",
+      "dialogueAssessment",
+      "themes",
+      "marketability",
+      "comparables",
+      "overallRating",
+      "overallNotes",
+      "strengths",
+      "weaknesses",
+      "improvementNotes",
+    ],
+    properties: {
+      logline: { type: "string" },
+      loglineAssessment: {
+        type: "object",
+        additionalProperties: false,
+        required: ["score", "strengths", "weaknesses", "rewrites"],
+        properties: {
+          score: { type: "number" },
+          strengths: { type: "array", items: { type: "string" } },
+          weaknesses: { type: "array", items: { type: "string" } },
+          rewrites: { type: "array", items: { type: "string" } },
+        },
+      },
+      synopsis: { type: "string" },
+      structureAnalysis: {
+        type: "object",
+        additionalProperties: false,
+        required: ["overall", "notes", "act1", "act2", "act3"],
+        properties: {
+          overall: { type: "string" },
+          notes: { type: "string" },
+          act1: {
+            type: "object",
+            additionalProperties: false,
+            required: ["summary", "incitingIncident", "issues"],
+            properties: {
+              summary: { type: "string" },
+              incitingIncident: { type: "string" },
+              issues: { type: "array", items: { type: "string" } },
+            },
+          },
+          act2: {
+            type: "object",
+            additionalProperties: false,
+            required: ["summary", "midpointReversal", "issues"],
+            properties: {
+              summary: { type: "string" },
+              midpointReversal: { type: "string" },
+              issues: { type: "array", items: { type: "string" } },
+            },
+          },
+          act3: {
+            type: "object",
+            additionalProperties: false,
+            required: ["summary", "climax", "issues"],
+            properties: {
+              summary: { type: "string" },
+              climax: { type: "string" },
+              issues: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+      },
+      characterAnalysis: {
+        type: "object",
+        additionalProperties: false,
+        required: ["protagonist", "supporting", "notes"],
+        properties: {
+          protagonist: {
+            type: "object",
+            additionalProperties: false,
+            required: ["name", "arc", "goal", "flaw", "notes"],
+            properties: {
+              name: { type: "string" },
+              arc: { type: "string" },
+              goal: { type: "string" },
+              flaw: { type: "string" },
+              notes: { type: "string" },
+            },
+          },
+          antagonist: {
+            type: "object",
+            additionalProperties: false,
+            required: ["name", "opposition", "motivation", "notes"],
+            properties: {
+              name: { type: "string" },
+              opposition: { type: "string" },
+              motivation: { type: "string" },
+              notes: { type: "string" },
+            },
+          },
+          supporting: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["name", "function", "notes"],
+              properties: {
+                name: { type: "string" },
+                function: { type: "string" },
+                notes: { type: "string" },
+              },
+            },
+          },
+          notes: { type: "string" },
+        },
+      },
+      dialogueAssessment: {
+        type: "object",
+        additionalProperties: false,
+        required: ["rating", "strengths", "weaknesses", "examples"],
+        properties: {
+          rating: { type: "string" },
+          strengths: { type: "array", items: { type: "string" } },
+          weaknesses: { type: "array", items: { type: "string" } },
+          examples: { type: "array", items: { type: "string" } },
+        },
+      },
+      themes: { type: "array", items: { type: "string" } },
+      marketability: {
+        type: "object",
+        additionalProperties: false,
+        required: ["audienceAppeal", "commercialViability", "notes"],
+        properties: {
+          audienceAppeal: { type: "string" },
+          commercialViability: { type: "string" },
+          notes: { type: "string" },
+        },
+      },
+      comparables: { type: "array", items: { type: "string" } },
+      overallRating: { type: "string" },
+      overallNotes: { type: "string" },
+      strengths: { type: "array", items: { type: "string" } },
+      weaknesses: { type: "array", items: { type: "string" } },
+      improvementNotes: { type: "array", items: { type: "string" } },
+    },
+  };
+}
+
+export interface ScriptCoverage {
+  logline: string;
+  loglineAssessment: {
+    score: number;
+    strengths: string[];
+    weaknesses: string[];
+    rewrites: string[];
+  };
+  synopsis: string;
+  structureAnalysis: {
+    overall: string;
+    notes: string;
+    act1: { summary: string; incitingIncident: string; issues: string[] };
+    act2: { summary: string; midpointReversal: string; issues: string[] };
+    act3: { summary: string; climax: string; issues: string[] };
+  };
+  characterAnalysis: {
+    protagonist: { name: string; arc: string; goal: string; flaw: string; notes: string };
+    antagonist?: { name: string; opposition: string; motivation: string; notes: string };
+    supporting: { name: string; function: string; notes: string }[];
+    notes: string;
+  };
+  dialogueAssessment: {
+    rating: string;
+    strengths: string[];
+    weaknesses: string[];
+    examples: string[];
+  };
+  themes: string[];
+  marketability: {
+    audienceAppeal: string;
+    commercialViability: string;
+    notes: string;
+  };
+  comparables: string[];
+  overallRating: string;
+  overallNotes: string;
+  strengths: string[];
+  weaknesses: string[];
+  improvementNotes: string[];
+  generatedAt?: number;
+}
+
+/**
+ * Professional script coverage / script doctor notes.
+ * Modeled on the Black List + Industrial Scripts coverage format.
+ * Mirrors the kind of report a paid reader would deliver to a producer.
+ */
+export const generateScriptCoverage = async (
+  script: string,
+  genre: string,
+  opts?: { title?: string; logline?: string },
+): Promise<ScriptCoverage | null> => {
+  const cleaned = (script || "").trim();
+  if (!cleaned) return null;
+
+  const title = opts?.title?.trim() || "Untitled";
+  const priorLogline = opts?.logline?.trim() || "";
+
+  const prompt = `
+You are a veteran professional script reader for a major production company. You have read for Black List, A24, Neon, Annapurna, and major agencies (CAA, WME, UTA). You write tough-but-constructive coverage that producers and managers actually use to greenlight decisions.
+
+Deliver coverage for this ${genre} screenplay. Title: "${title}".
+${priorLogline ? `Writer's stated logline: "${priorLogline}"\n` : ""}
+Apply industry standards rigorously. Do not be sycophantic. If the script is not working, say so and explain why in craft terms. If it's exceptional, say so — but back it up.
+
+SCRIPT:
+"""
+${tail(cleaned, 60000)}
+"""
+
+Return JSON with these keys:
+- "logline": One sentence, protagonist + goal + obstacle + stakes, present tense.
+- "loglineAssessment":
+  - "score": 1-10
+  - "strengths": 2-4 bullets (what works about the concept)
+  - "weaknesses": 2-4 bullets (what dulls the hook)
+  - "rewrites": exactly 3 sharper alternative loglines
+- "synopsis": 2-3 tight paragraphs, in order: setup → turn → conflict → climax → resolution. No spoiler hedging.
+- "structureAnalysis":
+  - "overall": one of "Strong", "Adequate", "Weak"
+  - "notes": 2-4 sentences on structural rigor
+  - "act1": { "summary", "incitingIncident", "issues" (array) }
+  - "act2": { "summary", "midpointReversal", "issues" (array) }
+  - "act3": { "summary", "climax", "issues" (array) }
+- "characterAnalysis":
+  - "protagonist": { "name", "arc" (how they change), "goal" (external want), "flaw" (internal lie), "notes" (2-3 sentences on craft) }
+  - "antagonist": optional, same shape but { "name", "opposition", "motivation", "notes" }
+  - "supporting": up to 5 { "name", "function" (role in story), "notes" }
+  - "notes": overall character-craft assessment
+- "dialogueAssessment":
+  - "rating": one of "Excellent", "Good", "Fair", "Poor"
+  - "strengths": 2-4 bullets
+  - "weaknesses": 2-4 bullets
+  - "examples": 2-4 short quoted lines (under 25 words each) illustrating strengths or problems, prefixed with "STRONG:" or "WEAK:"
+- "themes": 3-5 thematic concerns the script dramatizes (not abstract words — specific claims)
+- "marketability":
+  - "audienceAppeal": who this is for, why they'd show up
+  - "commercialViability": one of "High", "Moderate", "Low"
+  - "notes": 2-3 sentences on distribution pathway (festival, streamer, theatrical, genre indie, etc.)
+- "comparables": 3-5 recent produced films it could be pitched alongside ("X meets Y" is OK, but prefer concrete titles). Use real, well-known releases.
+- "overallRating": EXACTLY one of "Recommend", "Consider", "Pass"
+- "overallNotes": 3-5 sentences summarizing the verdict
+- "strengths": 3-5 bullets (the report's top positives)
+- "weaknesses": 3-5 bullets (the report's top concerns)
+- "improvementNotes": 4-8 prioritized, actionable rewrite directives ("Push the inciting incident up 10 pages," "Give the antagonist a scene of grace," etc.)
+
+RATING CALIBRATION (industry standard — be strict):
+- "Recommend" = a producer should actively chase this. Rare. Professional-grade on almost every axis.
+- "Consider" = has clear strengths but needs work before packaging. Most common outcome.
+- "Pass" = fundamental structural, character, or concept issues that can't be fixed by polish.
+
+Be specific. Cite pages, characters, scenes where useful. No vague generalities. No marketing puff. Return ONLY JSON matching the schema.
+`.trim();
+
+  const res = await callOpenAIJsonSchema<ScriptCoverage>(prompt, buildCoverageSchema(), {
+    temperature: 0.35,
+    max_tokens: 6000,
+    request_tag: "coverage",
+    schema_name: "ScriptCoverage",
+    model: MODEL_JSON_RAW,
+  });
+
+  if (!res.data) return null;
+  return { ...res.data, generatedAt: Date.now() };
+};
+
+// ============================================================
+// SHOT LIST GENERATOR (HI-3)
+// Professional shot list for pre-production — the document every
+// 1st AD, DP, and director marks up on set. Modeled on StudioBinder /
+// Celtx industry standards.
+// ============================================================
+
+export interface Shot {
+  sceneNumber: string;        // "1", "1A", "2", etc. — matches slugline order
+  shotNumber: string;         // "1", "2", "3" — sequential within scene
+  slugline?: string;          // "INT. DINER - NIGHT"
+  shotSize: string;           // ECU, CU, MCU, MS, MLS, LS, ELS, OS, 2-Shot, POV, Insert
+  angle: string;              // Eye Level, Low Angle, High Angle, Dutch, Bird's Eye, Worm's Eye, OTS
+  movement: string;           // Static, Pan, Tilt, Dolly, Tracking, Crane, Handheld, Steadicam, Zoom
+  lens?: string;              // 24mm, 35mm, 50mm, 85mm, 135mm, etc.
+  subject: string;            // Who / what is in the shot
+  action: string;             // What happens — 1-2 sentences
+  dialogueCue?: string;       // Opening line of dialogue in this shot, if any
+  duration?: string;          // "3s", "8s", "12s"
+  equipment?: string;         // Gimbal, slider, crane, tripod, drone, steadicam
+  notes?: string;             // Lighting, VFX, SFX, safety, blocking reminders
+  priority?: "Must-Have" | "Nice-to-Have" | "Coverage";
+}
+
+export interface ShotListScene {
+  sceneNumber: string;
+  slugline: string;
+  dayNight?: string;          // "DAY" | "NIGHT" | "DAWN" | "DUSK" | "CONTINUOUS"
+  location?: string;
+  summary?: string;           // One-sentence beat of the scene
+  estimatedMinutes?: number;  // Estimated screen time
+  shots: Shot[];
+}
+
+export interface ShotList {
+  title?: string;
+  genre?: string;
+  totalShots: number;
+  totalScenes: number;
+  notes?: string;
+  scenes: ShotListScene[];
+  generatedAt?: number;
+}
+
+function buildShotListSchema() {
+  const shotSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "sceneNumber",
+      "shotNumber",
+      "slugline",
+      "shotSize",
+      "angle",
+      "movement",
+      "lens",
+      "subject",
+      "action",
+      "dialogueCue",
+      "duration",
+      "equipment",
+      "notes",
+      "priority",
+    ],
+    properties: {
+      sceneNumber: { type: "string" },
+      shotNumber: { type: "string" },
+      slugline: { type: "string" },
+      shotSize: { type: "string" },
+      angle: { type: "string" },
+      movement: { type: "string" },
+      lens: { type: "string" },
+      subject: { type: "string" },
+      action: { type: "string" },
+      dialogueCue: { type: "string" },
+      duration: { type: "string" },
+      equipment: { type: "string" },
+      notes: { type: "string" },
+      priority: { type: "string" },
+    },
+  };
+  const sceneSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "sceneNumber",
+      "slugline",
+      "dayNight",
+      "location",
+      "summary",
+      "estimatedMinutes",
+      "shots",
+    ],
+    properties: {
+      sceneNumber: { type: "string" },
+      slugline: { type: "string" },
+      dayNight: { type: "string" },
+      location: { type: "string" },
+      summary: { type: "string" },
+      estimatedMinutes: { type: "number" },
+      shots: { type: "array", items: shotSchema },
+    },
+  };
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["totalShots", "totalScenes", "notes", "scenes"],
+    properties: {
+      totalShots: { type: "number" },
+      totalScenes: { type: "number" },
+      notes: { type: "string" },
+      scenes: { type: "array", items: sceneSchema },
+    },
+  };
+}
+
+/**
+ * Professional shot list generator.
+ * Input: raw screenplay text (Fountain or loose), optional storyboard frames & genre.
+ * Output: scene-by-scene shot breakdown with industry-standard coverage.
+ */
+export const generateShotList = async (
+  script: string,
+  opts?: {
+    genre?: string;
+    title?: string;
+    storyboard?: StoryboardFrame[];
+    lowBudget?: boolean;
+  },
+): Promise<ShotList | null> => {
+  const cleaned = (script || "").trim();
+  if (!cleaned) return null;
+
+  const genre = opts?.genre?.trim() || "drama";
+  const title = opts?.title?.trim() || "Untitled";
+  const lowBudget = Boolean(opts?.lowBudget);
+
+  const storyboardHint =
+    opts?.storyboard && opts.storyboard.length
+      ? `\nEXISTING STORYBOARD HINTS (use as reference but do NOT be constrained by them — the shot list is more granular):\n${opts.storyboard
+          .slice(0, 40)
+          .map(
+            (f, i) =>
+              `  ${i + 1}. [${f.scene || "?"}] ${f.shotSize || "?"} · ${f.cameraAngle || "?"} · ${f.cameraMovement || "?"} — ${(f.description || "").slice(0, 140)}`,
+          )
+          .join("\n")}\n`
+      : "";
+
+  const budgetDirective = lowBudget
+    ? `BUDGET CONSTRAINT: Micro-budget. Prefer tripod, handheld, natural light. Avoid crane, drone, steadicam, dolly track unless absolutely necessary for the story. Mark such shots as "Nice-to-Have".`
+    : `BUDGET: Professional indie. Use crane/dolly/drone/steadicam where the story benefits. Justify each specialty shot in notes.`;
+
+  const prompt = `
+You are a veteran 1st Assistant Director and Director of Photography. You have shot lists from Roger Deakins, Rachel Morrison, Hoyte van Hoytema, and Bradford Young as references in your head. You build the exact document a professional crew needs to prep and shoot.
+
+Break this ${genre} screenplay — "${title}" — into a professional shot list.
+
+${budgetDirective}
+${storyboardHint}
+
+For EVERY scene in the script, produce:
+- sceneNumber (string, sequential starting at "1")
+- slugline (e.g. "INT. DINER - NIGHT")
+- dayNight ("DAY" | "NIGHT" | "DAWN" | "DUSK" | "CONTINUOUS" | "MAGIC HOUR")
+- location (the physical place, e.g. "Roadside Diner")
+- summary (one sentence describing the dramatic beat)
+- estimatedMinutes (screen time this scene will occupy — decimals OK)
+- shots: array of 3-12 shots covering the scene properly
+
+For EACH shot, produce:
+- sceneNumber (must match parent scene)
+- shotNumber (sequential within scene: "1", "2", "3" ...)
+- slugline (repeat parent slugline)
+- shotSize (one of: ECU, CU, MCU, MS, MLS, LS, ELS, OS, 2-Shot, POV, Insert)
+- angle (Eye Level, Low Angle, High Angle, Dutch, Bird's Eye, Worm's Eye, OTS)
+- movement (Static, Pan L→R, Pan R→L, Tilt Up, Tilt Down, Dolly In, Dolly Out, Tracking, Crane Up, Crane Down, Handheld, Steadicam, Zoom In, Zoom Out, Whip Pan)
+- lens (concrete focal length with character, e.g. "35mm wide", "50mm standard", "85mm portrait", "135mm telephoto", "24mm wide", "18mm ultrawide")
+- subject (who/what is in frame — specific character names)
+- action (1-2 sentences describing what happens in the shot)
+- dialogueCue (the first line of dialogue in this shot, if any — else empty string)
+- duration (estimate: "2s", "5s", "10s", "15s")
+- equipment (concrete gear: "Tripod", "Handheld", "Gimbal (DJI Ronin)", "Slider 3ft", "Jib 8ft", "Dolly + track 20ft", "Steadicam", "Drone", "Car mount")
+- notes (lighting / VFX / SFX / safety / blocking reminders — be specific)
+- priority (one of: "Must-Have", "Coverage", "Nice-to-Have")
+
+COVERAGE RULES (industry standard):
+- Every dialogue scene needs at least: 1 master/establishing + singles/OTS per speaking character + inserts for key props.
+- Every action beat needs: 1 wide for geography + tighter shots for impact.
+- Mark safety shots ("just in case" coverage) as "Coverage".
+- Mark story-critical shots as "Must-Have".
+- Mark stylistic flourishes as "Nice-to-Have".
+
+SCRIPT:
+"""
+${tail(cleaned, 50000)}
+"""
+
+Also return:
+- totalShots: total count across all scenes
+- totalScenes: number of scenes covered
+- notes: 2-4 sentences of production-wide notes (tone, recurring visual motifs, key technical challenges)
+
+Return ONLY JSON matching the schema. Do not skip scenes. Do not invent scenes not in the script.
+`.trim();
+
+  const res = await callOpenAIJsonSchema<Omit<ShotList, "title" | "genre" | "generatedAt">>(
+    prompt,
+    buildShotListSchema(),
+    {
+      temperature: 0.35,
+      max_tokens: 12000,
+      request_tag: "shotlist",
+      schema_name: "ShotList",
+      model: MODEL_JSON_RAW,
+    },
+  );
+
+  if (!res.data) return null;
+  return {
+    title,
+    genre,
+    ...res.data,
+    generatedAt: Date.now(),
+  };
+};
+
+// ============================================================
+// DIRECTOR'S STATEMENT (HI-4 — pitch deck cornerstone)
+// The personal first-person "why this film, why now, why me" piece
+// that goes at the end of every professional pitch deck.
+// ============================================================
+
+export interface DirectorStatement {
+  statement: string;          // The full 3-5 paragraph piece
+  visualApproach: string;     // 2-3 sentences on shooting style / look
+  tonalReference: string;     // "If Hereditary had a baby with Moonlight..."
+  personalConnection: string; // Why this director — the why-me hook
+  generatedAt?: number;
+}
+
+function buildDirectorStatementSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["statement", "visualApproach", "tonalReference", "personalConnection"],
+    properties: {
+      statement: { type: "string" },
+      visualApproach: { type: "string" },
+      tonalReference: { type: "string" },
+      personalConnection: { type: "string" },
+    },
+  };
+}
+
+export const generateDirectorStatement = async (
+  opts: {
+    script?: string;
+    logline?: string;
+    synopsis?: string;
+    genre?: string;
+    themes?: string[];
+    title?: string;
+  },
+): Promise<DirectorStatement | null> => {
+  const genre = (opts.genre || "drama").trim();
+  const title = (opts.title || "Untitled").trim();
+  const logline = (opts.logline || "").trim();
+  const synopsis = (opts.synopsis || "").trim();
+  const themes = Array.isArray(opts.themes) ? opts.themes.filter(Boolean) : [];
+  const script = (opts.script || "").trim();
+
+  if (!logline && !synopsis && !script) return null;
+
+  const prompt = `
+You write director's statements for pitch decks that open doors at A24, Neon, Plan B, Killer Films, and the major festivals. The voice is personal, specific, first-person — the director speaking directly to a financier or producer. Not marketing. Not puffery. Craft and conviction.
+
+PROJECT: "${title}" — a ${genre}
+
+${logline ? `LOGLINE: ${logline}\n` : ""}
+${synopsis ? `SYNOPSIS: ${synopsis}\n` : ""}
+${themes.length ? `THEMES: ${themes.join(", ")}\n` : ""}
+${script ? `\nOPENING OF SCRIPT (for voice calibration):\n"""\n${tail(script, 4000)}\n"""\n` : ""}
+
+Write a director's statement package:
+
+1. "statement" — 3-5 paragraphs, first person ("I"), under 400 words total.
+   - Paragraph 1: Why this story, right now. What in the culture or the director's life demands it.
+   - Paragraph 2: What the film is really about (subtext + theme), in plain terms.
+   - Paragraph 3: The visual and tonal approach — cinematography, performance, pacing — in concrete craft terms.
+   - Paragraph 4: Why the director is the only person who can make this film.
+   - Optional paragraph 5: A closing image or line that lingers.
+
+2. "visualApproach" — 2-3 sentences. Concrete: aspect ratio, lens preference, color palette, camera style, production design philosophy.
+
+3. "tonalReference" — One sentence of the form "[Established film] meets [established film]" OR "If [director]'s [film] had the [quality] of [other film]." Use real, well-known titles.
+
+4. "personalConnection" — 2-3 sentences on why the director, personally, is the right voice for this. Specific, not generic. Can reference craft lineage, lived experience, or obsession.
+
+CRITICAL VOICE NOTES:
+- First person. Conversational but precise.
+- NO vague phrases like "human condition," "powerful story," "thought-provoking," "journey," "unforgettable."
+- NO marketing speak. This reads like a filmmaker talking to a peer, not a press release.
+- Specific images over abstract claims. "A teenager licking rain off her lips" beats "beauty in small moments."
+
+Return ONLY JSON matching the schema.
+`.trim();
+
+  const res = await callOpenAIJsonSchema<DirectorStatement>(
+    prompt,
+    buildDirectorStatementSchema(),
+    {
+      temperature: 0.75,
+      max_tokens: 1800,
+      request_tag: "director-statement",
+      schema_name: "DirectorStatement",
+      model: MODEL_JSON_RAW,
+    },
+  );
+
+  if (!res.data) return null;
+  return { ...res.data, generatedAt: Date.now() };
+};
+
+// ============================================================
+// SOCIAL MEDIA PACKAGE (HI-6)
+// IG captions, X threads, TikTok hook, LinkedIn, hashtag sets,
+// and a 4-week BTS content calendar. Everything the film's social
+// team needs to launch a campaign — drafted by a seasoned indie
+// film marketing strategist.
+// ============================================================
+
+export interface InstagramCaption {
+  variant: string;       // "Mood Post", "Carousel Caption", "BTS Tease"
+  caption: string;
+  hashtags: string[];
+  callToAction: string;
+}
+
+export interface TwitterThread {
+  hookTweet: string;
+  tweets: string[];      // each tweet body (excluding "2/" etc — we'll number in UI)
+  callToAction: string;
+}
+
+export interface TikTokHookScript {
+  hookLine: string;      // first 3 seconds — attention grab
+  beats: string[];       // shot-by-shot text overlays / cuts
+  voiceOver: string;     // spoken script, timed loosely to beats
+  onScreenText: string;  // final text overlay
+  caption: string;
+  hashtags: string[];
+}
+
+export interface HashtagSet {
+  label: string;         // "Core Film", "Genre Community", "Discovery"
+  tags: string[];
+}
+
+export interface ContentCalendarEntry {
+  week: number;
+  theme: string;
+  platforms: string[];
+  contentIdea: string;
+  callToAction: string;
+}
+
+export interface SocialPackage {
+  headline: string;                              // the pitch in one line — for bio / headers
+  positioning: string;                           // 2-3 sentence marketing positioning
+  instagramCaptions: InstagramCaption[];         // 3
+  twitterThreads: TwitterThread[];               // 2
+  tiktokHook: TikTokHookScript;                  // 1
+  linkedinAnnouncement: string;                  // 1
+  hashtagSets: HashtagSet[];                     // 3
+  contentCalendar: ContentCalendarEntry[];       // 4 weeks
+  generatedAt?: number;
+}
+
+function buildSocialPackageSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "headline",
+      "positioning",
+      "instagramCaptions",
+      "twitterThreads",
+      "tiktokHook",
+      "linkedinAnnouncement",
+      "hashtagSets",
+      "contentCalendar",
+    ],
+    properties: {
+      headline: { type: "string" },
+      positioning: { type: "string" },
+      instagramCaptions: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["variant", "caption", "hashtags", "callToAction"],
+          properties: {
+            variant: { type: "string" },
+            caption: { type: "string" },
+            hashtags: { type: "array", items: { type: "string" } },
+            callToAction: { type: "string" },
+          },
+        },
+      },
+      twitterThreads: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["hookTweet", "tweets", "callToAction"],
+          properties: {
+            hookTweet: { type: "string" },
+            tweets: { type: "array", items: { type: "string" } },
+            callToAction: { type: "string" },
+          },
+        },
+      },
+      tiktokHook: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "hookLine",
+          "beats",
+          "voiceOver",
+          "onScreenText",
+          "caption",
+          "hashtags",
+        ],
+        properties: {
+          hookLine: { type: "string" },
+          beats: { type: "array", items: { type: "string" } },
+          voiceOver: { type: "string" },
+          onScreenText: { type: "string" },
+          caption: { type: "string" },
+          hashtags: { type: "array", items: { type: "string" } },
+        },
+      },
+      linkedinAnnouncement: { type: "string" },
+      hashtagSets: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["label", "tags"],
+          properties: {
+            label: { type: "string" },
+            tags: { type: "array", items: { type: "string" } },
+          },
+        },
+      },
+      contentCalendar: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["week", "theme", "platforms", "contentIdea", "callToAction"],
+          properties: {
+            week: { type: "number" },
+            theme: { type: "string" },
+            platforms: { type: "array", items: { type: "string" } },
+            contentIdea: { type: "string" },
+            callToAction: { type: "string" },
+          },
+        },
+      },
+    },
+  };
+}
+
+export const generateSocialPackage = async (opts: {
+  logline?: string;
+  synopsis?: string;
+  genre?: string;
+  themes?: string[];
+  title?: string;
+  targetAudience?: string;
+  releaseStage?: "development" | "pre-production" | "production" | "post" | "festival" | "release";
+}): Promise<SocialPackage | null> => {
+  const genre = (opts.genre || "drama").trim();
+  const title = (opts.title || "Untitled").trim();
+  const logline = (opts.logline || "").trim();
+  const synopsis = (opts.synopsis || "").trim();
+  const themes = Array.isArray(opts.themes) ? opts.themes.filter(Boolean) : [];
+  const stage = opts.releaseStage || "production";
+  const audience = (opts.targetAudience || "").trim();
+
+  if (!logline && !synopsis) return null;
+
+  const prompt = `
+You are an indie film marketing strategist who has launched A24, Neon, IFC, and Mubi titles. You've run campaigns for Sundance premieres and micro-budget distribution. You write social copy that sounds like a filmmaker — specific, moody, confident — not a marketing template.
+
+PROJECT: "${title}" — a ${genre}
+STAGE: ${stage}
+${audience ? `TARGET AUDIENCE: ${audience}\n` : ""}
+${logline ? `LOGLINE: ${logline}\n` : ""}
+${synopsis ? `SYNOPSIS: ${synopsis}\n` : ""}
+${themes.length ? `THEMES: ${themes.join(", ")}\n` : ""}
+
+Produce a launch-ready social package. Every piece must feel native to its platform — not recycled copy.
+
+1. "headline" — The pitch in ≤12 words. Usable as IG bio / site hero / header tag.
+
+2. "positioning" — 2-3 sentences of positioning: who this is for, why it matters, what tonal shelf it sits on. Pitch-deck voice, not ad voice.
+
+3. "instagramCaptions" — EXACTLY 3, each:
+   - variant: one of "Mood Post", "Carousel Caption", "BTS Tease"
+   - caption: 80-180 words; first line is a hook, second line is white space, body is evocative and specific. No em-dashes as a stylistic tic.
+   - hashtags: 8-12 relevant tags (mix niche + broader)
+   - callToAction: one-liner (e.g. "Link in bio." / "DM for press access.")
+
+4. "twitterThreads" — EXACTLY 2 teaser threads, each:
+   - hookTweet: a single tweet ≤240 chars that stops the scroll. No question marks unless the hook demands one.
+   - tweets: 4-6 follow-up tweets, each ≤240 chars, concrete images over abstractions
+   - callToAction: the final tweet as a soft ask
+
+5. "tiktokHook" — a 15-30s vertical video script:
+   - hookLine: what's said / shown in the first 3s
+   - beats: 5-8 on-screen beats (cuts / text cards)
+   - voiceOver: full spoken script, under 70 words
+   - onScreenText: final overlay
+   - caption: 120-220 char caption
+   - hashtags: 6-10 tags, mix #indiefilm + genre-specific + FYP-friendly
+
+6. "linkedinAnnouncement" — ONE post, 180-300 words, founder/director voice. The opening line is the hook. Third-person polish, not corporate-speak.
+
+7. "hashtagSets" — EXACTLY 3 sets:
+   - "Core Film" (craft / industry tags — #indiefilm, #filmmaking, #screenwriting-adjacent)
+   - "Genre Community" (audience tags specific to ${genre} — real, active communities)
+   - "Discovery" (trending or algorithmic tags that could push the post)
+
+8. "contentCalendar" — 4-week rollout plan, EXACTLY 4 entries (weeks 1-4), each:
+   - week (1-4)
+   - theme (e.g. "Concept reveal", "Character intros", "BTS day-in-the-life", "Soft launch")
+   - platforms (subset of ["Instagram", "TikTok", "X", "LinkedIn", "YouTube Shorts"])
+   - contentIdea: specific piece of content to post that week
+   - callToAction: ask of the audience
+
+STYLE RULES:
+- No clichés: "epic," "journey," "powerful," "emotional," "unforgettable," "mind-blowing," "roller-coaster," "must-watch."
+- No AI tell: em-dash tics, hedging phrases, "it's not just X — it's Y."
+- Use concrete imagery from the script/synopsis when possible. Quote a beat, don't summarize it.
+- Hashtags always start with # and contain no spaces. No hashtags with over 30 characters.
+- For ${genre}, lean into the subcultures and communities that already post about this genre on each platform.
+
+Return ONLY JSON matching the schema.
+`.trim();
+
+  const res = await callOpenAIJsonSchema<SocialPackage>(
+    prompt,
+    buildSocialPackageSchema(),
+    {
+      temperature: 0.8,
+      max_tokens: 4500,
+      request_tag: "social-package",
+      schema_name: "SocialPackage",
+      model: MODEL_JSON_RAW,
+    },
+  );
+
+  if (!res.data) return null;
+  return { ...res.data, generatedAt: Date.now() };
+};
+
+// ============================================================
+// DISTRIBUTION & FESTIVAL STRATEGY (HI-8)
+// Festival circuit, submission calendar, distribution pathway,
+// platform-specific pitch angles, PR playbook, sales agent shortlist.
+// Modeled after the playbook a festival strategist / sales rep uses.
+// ============================================================
+
+export interface FestivalTarget {
+  name: string;
+  tier: string;             // "A-list" | "Top Genre" | "Regional" | "Specialty" | "Shorts"
+  location: string;
+  submissionWindow: string; // e.g. "Opens August 2026, closes September 2026"
+  notificationDate: string; // e.g. "Late November 2026"
+  festivalDate: string;     // e.g. "January 2027"
+  fee: string;              // "$60-$120"
+  fitScore: string;         // "Must Submit" | "Strong Fit" | "Worth Trying" | "Reach"
+  fitReasoning: string;     // 1-2 sentences — WHY this festival for this film
+}
+
+export interface SubmissionPhase {
+  phase: string;            // e.g. "Phase 1 — A-list Swings (Q3 2026)"
+  window: string;           // "Aug–Oct 2026"
+  milestones: string[];     // concrete actions
+}
+
+export interface DistributionPathway {
+  pathway: string;          // "Festival → Boutique Theatrical → Streaming (A24 / Neon model)"
+  description: string;
+  bestFor: string;
+  risks: string;
+  exampleFilms: string[];   // real titles that took this path
+}
+
+export interface PlatformPitch {
+  platform: string;         // "A24", "Neon", "Mubi", "IFC Films", "Netflix Original", "Shudder"
+  why: string;              // why this platform for this film
+  pitchAngle: string;       // how to position it in conversation
+  contactNotes: string;     // practical access path — reps, festivals, open submissions
+}
+
+export interface PRPhase {
+  phase: string;            // "Pre-Festival Buzz", "Premiere Night", "Post-Festival"
+  window: string;
+  tactics: string[];
+}
+
+export interface SalesAgent {
+  name: string;             // e.g. "Cinetic Media", "UTA Independent Film Group"
+  fit: string;              // why they fit this film
+  note: string;             // practical advice on approaching them
+}
+
+export interface DistributionStrategy {
+  positioning: string;             // 2-3 sentences — market positioning statement
+  tierAssessment: string;          // "This script sits at the A-list festival tier because..."
+  festivals: FestivalTarget[];
+  submissionTimeline: SubmissionPhase[];
+  distributionPathways: DistributionPathway[];
+  platformPitches: PlatformPitch[];
+  prStrategy: PRPhase[];
+  salesAgents: SalesAgent[];
+  risks: string[];
+  quickWins: string[];
+  generatedAt?: number;
+}
+
+function buildDistributionStrategySchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "positioning",
+      "tierAssessment",
+      "festivals",
+      "submissionTimeline",
+      "distributionPathways",
+      "platformPitches",
+      "prStrategy",
+      "salesAgents",
+      "risks",
+      "quickWins",
+    ],
+    properties: {
+      positioning: { type: "string" },
+      tierAssessment: { type: "string" },
+      festivals: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "name",
+            "tier",
+            "location",
+            "submissionWindow",
+            "notificationDate",
+            "festivalDate",
+            "fee",
+            "fitScore",
+            "fitReasoning",
+          ],
+          properties: {
+            name: { type: "string" },
+            tier: { type: "string" },
+            location: { type: "string" },
+            submissionWindow: { type: "string" },
+            notificationDate: { type: "string" },
+            festivalDate: { type: "string" },
+            fee: { type: "string" },
+            fitScore: { type: "string" },
+            fitReasoning: { type: "string" },
+          },
+        },
+      },
+      submissionTimeline: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["phase", "window", "milestones"],
+          properties: {
+            phase: { type: "string" },
+            window: { type: "string" },
+            milestones: { type: "array", items: { type: "string" } },
+          },
+        },
+      },
+      distributionPathways: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["pathway", "description", "bestFor", "risks", "exampleFilms"],
+          properties: {
+            pathway: { type: "string" },
+            description: { type: "string" },
+            bestFor: { type: "string" },
+            risks: { type: "string" },
+            exampleFilms: { type: "array", items: { type: "string" } },
+          },
+        },
+      },
+      platformPitches: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["platform", "why", "pitchAngle", "contactNotes"],
+          properties: {
+            platform: { type: "string" },
+            why: { type: "string" },
+            pitchAngle: { type: "string" },
+            contactNotes: { type: "string" },
+          },
+        },
+      },
+      prStrategy: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["phase", "window", "tactics"],
+          properties: {
+            phase: { type: "string" },
+            window: { type: "string" },
+            tactics: { type: "array", items: { type: "string" } },
+          },
+        },
+      },
+      salesAgents: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name", "fit", "note"],
+          properties: {
+            name: { type: "string" },
+            fit: { type: "string" },
+            note: { type: "string" },
+          },
+        },
+      },
+      risks: { type: "array", items: { type: "string" } },
+      quickWins: { type: "array", items: { type: "string" } },
+    },
+  };
+}
+
+export const generateDistributionStrategy = async (opts: {
+  logline?: string;
+  synopsis?: string;
+  genre?: string;
+  length?: string;
+  themes?: string[];
+  title?: string;
+  budgetTier?: "micro" | "indie" | "mid" | "studio"; // optional — adjusts pathways
+}): Promise<DistributionStrategy | null> => {
+  const genre = (opts.genre || "drama").trim();
+  const title = (opts.title || "Untitled").trim();
+  const logline = (opts.logline || "").trim();
+  const synopsis = (opts.synopsis || "").trim();
+  const themes = Array.isArray(opts.themes) ? opts.themes.filter(Boolean) : [];
+  const length = (opts.length || "").trim();
+  const budgetTier = opts.budgetTier || "indie";
+
+  if (!logline && !synopsis) return null;
+
+  const thisYear = new Date().getFullYear();
+  const nextYear = thisYear + 1;
+
+  const lengthGuide = /short|10\s*min|under\s*30/i.test(length)
+    ? "This is a SHORT film — prioritize shorts-eligible festivals (Sundance Shorts, SXSW Shorts, Aspen Shortsfest, Palm Springs ShortFest, Clermont-Ferrand). Skip feature-only venues."
+    : /feature|90|120/i.test(length)
+    ? "This is a FEATURE — target A-list and top genre feature competitions."
+    : "Infer feature vs. short from context, but err toward feature-length pathway if unclear.";
+
+  const budgetGuide: Record<string, string> = {
+    micro:
+      "Micro-budget (<$250K). Theatrical distribution unlikely without a festival anchor (Sundance/SXSW/Tribeca). Realistic pathway: festival premiere → streaming sale (Netflix/Hulu/AMC+) or SVOD aggregator (1091, Gravitas Ventures).",
+    indie:
+      "Indie ($250K-$5M). Boutique theatrical is viable if a top-3 festival accepts (A24/Neon/IFC Films/Magnolia/Bleecker Street). Realistic fallback: Hulu, Mubi, Criterion Channel, or streamer original.",
+    mid: "Mid-budget ($5M-$20M). Needs a sales agent (Cinetic, UTA, WME, CAA) and a distribution guarantee. Aim for Sundance/Cannes/TIFF premiere with Neon/A24/Searchlight as targets.",
+    studio: "Studio-backed. Distribution is usually pre-sold; festival strategy is about prestige positioning for awards and press.",
+  };
+
+  const prompt = `
+You are a veteran festival strategist and sales rep. You've placed films at Sundance, SXSW, Tribeca, TIFF, Berlin, Cannes, Venice, and genre circuits (Fantasia, Fantastic Fest, Beyond Fest, SITGES). You advise filmmakers on the real, current (${thisYear}-${nextYear}) distribution landscape — not what was true five years ago.
+
+PROJECT: "${title}" — a ${genre}
+${length ? `LENGTH: ${length}\n` : ""}
+${logline ? `LOGLINE: ${logline}\n` : ""}
+${synopsis ? `SYNOPSIS: ${synopsis}\n` : ""}
+${themes.length ? `THEMES: ${themes.join(", ")}\n` : ""}
+
+LENGTH GUIDANCE: ${lengthGuide}
+BUDGET TIER GUIDANCE: ${budgetGuide[budgetTier]}
+
+Deliver a complete, current, and actionable distribution and festival strategy.
+
+1. "positioning" — 2-3 sentences. Pitch-level market positioning: what shelf this sits on, what it competes with, why a buyer would want it.
+
+2. "tierAssessment" — 2-3 sentences. Honest assessment: is this an A-list festival contender, a top genre circuit fit, a regional/specialty play, or a shorts-festival play? Justify.
+
+3. "festivals" — 8-12 real, named, currently-active festivals. For EACH:
+   - name (real festival, active ${thisYear}-${nextYear})
+   - tier ("A-list", "Top Genre", "Regional", "Specialty", "Shorts")
+   - location (city, country)
+   - submissionWindow (real month range — e.g. "FilmFreeway opens August ${thisYear}, regular deadline September ${thisYear}")
+   - notificationDate (e.g. "Late November ${thisYear}")
+   - festivalDate (e.g. "January ${nextYear}")
+   - fee (realistic USD range)
+   - fitScore ("Must Submit", "Strong Fit", "Worth Trying", "Reach")
+   - fitReasoning (WHY this festival for THIS film — reference the story / themes / genre)
+
+   Cover a mix: 2-3 A-list swings, 3-5 strong-fit genre/specialty, 2-3 regional anchors, and 1-2 reach picks. For genre films, include the genre-specific majors (Fantastic Fest / Sitges / Fantasia / Beyond Fest for horror/sci-fi; Tribeca / DOC NYC / IDFA for docs; Slamdance for experimental).
+
+4. "submissionTimeline" — 3-5 phases. Each phase:
+   - phase ("Phase 1 — Fall A-list Swings")
+   - window ("August–October ${thisYear}")
+   - milestones (3-6 concrete actions — e.g. "Finalize FilmFreeway profile with press photos + sizzle", "Request Sundance fee waiver via WAV program if eligible")
+
+5. "distributionPathways" — 3-4 realistic pathways ranked by fit. Each:
+   - pathway ("Festival Premiere → Boutique Theatrical → Streaming Window")
+   - description (how it works — 2-3 sentences)
+   - bestFor (what this pathway requires to work)
+   - risks (what kills this pathway)
+   - exampleFilms (3-5 real titles that took this path recently)
+
+6. "platformPitches" — 5-7 specific distributors/streamers. Each:
+   - platform (real: A24, Neon, IFC Films, Magnolia, Mubi, Shudder, Searchlight, Netflix Original, Hulu, Prime Video, AMC+, Criterion Channel, Gravitas Ventures, Utopia, Oscilloscope, etc. — match to genre/tone)
+   - why (specific argument why THIS film for THIS platform — cite their slate)
+   - pitchAngle (the in-the-room pitch — one sentence)
+   - contactNotes (realistic access path — "Open submissions closed — access via sales rep", "Shudder takes unsolicited genre shorts via their festival pipeline", etc.)
+
+7. "prStrategy" — 3-4 phases (pre-festival, premiere, post-festival/release):
+   - phase, window, tactics (3-6 concrete tactics per phase — e.g. "Place first-look exclusive with IndieWire 2 weeks before Sundance announcement")
+
+8. "salesAgents" — 4-6 real sales/distribution reps active in ${thisYear}-${nextYear}:
+   - name (real company — Cinetic Media, UTA Independent Film Group, CAA Media Finance, WME Independent, Endeavor Content, Submarine, Visit Films, Memento International, MK2, The Match Factory, etc.)
+   - fit (why they'd be right for this film — cite their slate)
+   - note (practical advice — "Best accessed via a festival premiere", "Open to cold email if film has press")
+
+9. "risks" — 4-6 specific risks in this strategy (genre saturation, timing conflicts, casting gaps, press angle gaps).
+
+10. "quickWins" — 3-5 high-leverage, do-this-now moves (cheap or free actions that materially improve odds).
+
+HARD RULES:
+- Only name REAL festivals, distributors, sales agents that exist as of ${thisYear}.
+- Dates must be in the near future (${thisYear}-${nextYear} cycle).
+- No made-up festival programs, no fictional distributors, no generic "submit to top festivals."
+- Reference the script's actual story/themes when justifying fit. Generic advice is a fail.
+- Be honest. If this is a regional play, say so. Don't promise Sundance to every micro-budget drama.
+
+Return ONLY JSON matching the schema.
+`.trim();
+
+  const res = await callOpenAIJsonSchema<DistributionStrategy>(
+    prompt,
+    buildDistributionStrategySchema(),
+    {
+      temperature: 0.55,
+      max_tokens: 7000,
+      request_tag: "distribution",
+      schema_name: "DistributionStrategy",
+      model: MODEL_JSON_RAW,
+    },
+  );
+
+  if (!res.data) return null;
+  return { ...res.data, generatedAt: Date.now() };
+};
+
+// ============================================================
+// CASTING SUGGESTIONS (HI-9)
+// Per-character casting shortlists — A-list aspirational, mid-tier
+// realistic, emerging indie-friendly, plus character-actor wildcards.
+// Modeled on a professional casting director's memo.
+// ============================================================
+
+function buildCastingSuggestionsSchema() {
+  const castingItem = {
+    type: "object",
+    additionalProperties: false,
+    required: ["name", "reason", "notableWork"],
+    properties: {
+      name: { type: "string" },
+      reason: { type: "string" },
+      notableWork: { type: "string" },
+    },
+  };
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["notes", "aList", "midTier", "emerging", "characterActors"],
+    properties: {
+      notes: { type: "string" },
+      aList: { type: "array", items: castingItem },
+      midTier: { type: "array", items: castingItem },
+      emerging: { type: "array", items: castingItem },
+      characterActors: { type: "array", items: castingItem },
+    },
+  };
+}
+
+export const generateCastingSuggestions = async (
+  character: Character,
+  opts?: {
+    genre?: string;
+    title?: string;
+    logline?: string;
+    synopsis?: string;
+    themes?: string[];
+  },
+): Promise<CharacterCasting | null> => {
+  if (!character?.name || !character?.description) return null;
+
+  const genre = (opts?.genre || "drama").trim();
+  const title = (opts?.title || "Untitled").trim();
+  const logline = (opts?.logline || "").trim();
+  const synopsis = (opts?.synopsis || "").trim();
+  const themes = Array.isArray(opts?.themes)
+    ? opts!.themes!.filter(Boolean)
+    : [];
+
+  const thisYear = new Date().getFullYear();
+
+  const prompt = `
+You are a veteran casting director with Oscar-nominated credits. You've cast for A24, Neon, Searchlight, Plan B, and HBO. You build realistic casting shortlists — not fantasy dream lists. Your suggestions are actors who are ALIVE, CURRENTLY WORKING as of ${thisYear}, and age-appropriate for the role.
+
+PROJECT: "${title}" — a ${genre}
+${logline ? `LOGLINE: ${logline}\n` : ""}
+${synopsis ? `SYNOPSIS: ${synopsis}\n` : ""}
+${themes.length ? `THEMES: ${themes.join(", ")}\n` : ""}
+
+ROLE TO CAST:
+- Name: ${character.name}
+- ${character.role ? `Role: ${character.role}\n` : ""}- Description: ${character.description}
+${character.traits && character.traits.length ? `- Traits: ${character.traits.join(", ")}\n` : ""}${character.mood ? `- Mood: ${character.mood}\n` : ""}${character.visualDescription ? `- Visual: ${character.visualDescription}\n` : ""}
+
+Produce a professional casting memo for this role:
+
+1. "notes" — 2-3 sentences. What this role specifically requires from an actor — physicality, emotional register, specific craft skill (e.g. "needs an actor who can hold silence," "requires subtle menace without heavies"). Not generic.
+
+2. "aList" — EXACTLY 3 A-list names. Bankable stars currently opening films/limited series in ${thisYear}. Big paychecks, packaging-tier.
+
+3. "midTier" — EXACTLY 3 mid-tier names. Respected working actors with a visible body of work — festival faves, critically-acclaimed TV leads, indie-prestige regulars. Realistic asks at a $2-10M budget.
+
+4. "emerging" — EXACTLY 3 emerging/indie-friendly names. Actors with buzz in the last 2-3 years but not yet name-above-title. Micro-budget reachable with the right script.
+
+5. "characterActors" — 2-3 character-actor wildcards. Scene-stealers / reliable supporting talents. The kind of casting that elevates a scene regardless of budget tier.
+
+FOR EACH actor, include:
+- name: Real actor, first-and-last, alive and working.
+- reason: 1-2 sentences on why they fit THIS role (reference the description, the emotional register, specific craft qualities). Not generic.
+- notableWork: One role that will help the reader instantly recall them (film/show + role or title).
+
+HARD RULES:
+- Only REAL, LIVING, CURRENTLY ACTIVE actors. If you're unsure if they're still working, pick someone else.
+- Match the character's age, gender presentation, and physicality. Don't suggest a 65-year-old for a 20-year-old role.
+- Diversify the shortlist where the role doesn't demand specificity — don't repeat the same actor archetype across tiers.
+- No dead actors. No retired actors. No actors who haven't appeared in anything in 5+ years.
+- Reasoning must reference specific craft qualities tied to the role — not marketing blurbs.
+
+Return ONLY JSON matching the schema.
+`.trim();
+
+  const res = await callOpenAIJsonSchema<CharacterCasting>(
+    prompt,
+    buildCastingSuggestionsSchema(),
+    {
+      temperature: 0.6,
+      max_tokens: 2500,
+      request_tag: "casting",
+      schema_name: "CastingSuggestions",
+      model: MODEL_JSON_RAW,
+    },
+  );
+
+  if (!res.data) return null;
+  return { ...res.data, generatedAt: Date.now() };
+};
+
+// ============================================================
+// VISION BOARD (PL-2 — director's vision board)
+// 10 curated visual panels: cinematography + color palette +
+// lighting + costume + production design + location. Each panel
+// contains a craft-specific DALL-E prompt tuned for cinematic
+// photorealism. Images are generated separately per-panel.
+// ============================================================
+
+export type VisionBoardCategory =
+  | "cinematography"
+  | "color_palette"
+  | "lighting"
+  | "costume"
+  | "production_design"
+  | "location";
+
+export interface VisionBoardPrompt {
+  id: string;                    // stable id for React keys and persistence
+  category: VisionBoardCategory;
+  title: string;                 // short label — "Rainy neon alley"
+  description: string;           // 1-2 sentences on the visual intent
+  imagePrompt: string;           // DALL-E 3 prompt (no text, photoreal, 400-800 chars)
+  imageUrl?: string;             // filled after image generation
+  generatedAt?: number;
+}
+
+export interface VisionBoard {
+  prompts: VisionBoardPrompt[];
+  generatedAt?: number;
+}
+
+function buildVisionBoardSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["prompts"],
+    properties: {
+      prompts: {
+        type: "array",
+        minItems: 10,
+        maxItems: 10,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "category", "title", "description", "imagePrompt"],
+          properties: {
+            id: { type: "string" },
+            category: {
+              type: "string",
+              enum: [
+                "cinematography",
+                "color_palette",
+                "lighting",
+                "costume",
+                "production_design",
+                "location",
+              ],
+            },
+            title: { type: "string" },
+            description: { type: "string" },
+            imagePrompt: { type: "string" },
+          },
+        },
+      },
+    },
+  };
+}
+
+export const generateVisionBoardPrompts = async (opts: {
+  genre?: string;
+  title?: string;
+  logline?: string;
+  synopsis?: string;
+  themes?: string[];
+  concept?: string;
+  script?: string;
+}): Promise<VisionBoard | null> => {
+  const genre = (opts.genre || "drama").trim();
+  const title = (opts.title || "Untitled").trim();
+  const logline = (opts.logline || "").trim();
+  const synopsis = (opts.synopsis || "").trim();
+  const themes = Array.isArray(opts.themes) ? opts.themes.filter(Boolean) : [];
+  const concept = (opts.concept || "").trim();
+  const script = (opts.script || "").trim();
+
+  if (!logline && !synopsis && !concept && !script) return null;
+
+  const prompt = `
+You are a senior cinematographer / production designer preparing a visual reference board ("lookbook") for "${title}" — a ${genre}. You speak the language of A24, Neon, Plan B: concrete, craft-specific, cinematic. No mood-board cliches.
+
+${logline ? `LOGLINE: ${logline}\n` : ""}${synopsis ? `SYNOPSIS: ${synopsis}\n` : ""}${themes.length ? `THEMES: ${themes.join(", ")}\n` : ""}${concept ? `CONCEPT NOTE: ${concept}\n` : ""}${script ? `\nOPENING OF SCRIPT (voice calibration only):\n"""\n${tail(script, 3000)}\n"""\n` : ""}
+
+Produce EXACTLY 10 vision-board panels covering the following distribution:
+- 2 x "cinematography" (framing aesthetic — a hero composition and a contrasting one)
+- 2 x "color_palette" (abstracted color language — the film's chromatic DNA, NOT a literal scene)
+- 1 x "lighting" (signature lighting mood / ratio)
+- 2 x "costume" (character aesthetic — wardrobe, texture, silhouette, detail)
+- 2 x "production_design" (set / environment / props / architecture)
+- 1 x "location" (the establishing world — the postcard shot)
+
+For EACH panel, produce:
+
+1. "id" — a short stable slug like "cine-01", "color-01", "costume-01", etc. Unique within this response.
+
+2. "title" — 3-7 word human-readable label. Evocative, specific. "Rainy neon alley, backlit" beats "City night scene."
+
+3. "description" — 1-2 sentences on the visual intent. What this panel is TELLING the viewer about tone, theme, or character. This is for the director/DP, not marketing.
+
+4. "imagePrompt" — a DALL-E 3 prompt, 400-700 characters, engineered for cinematic photorealism:
+   - Lead with the frame ("Cinematic still, [aspect ratio if relevant], ...")
+   - Specify subject + environment + lighting + lens/focal length language
+   - Reference concrete cinematography traditions when apt ("negative fill", "golden hour", "flat contrast with lifted blacks") but describe the quality — do NOT claim a specific named cinematographer or film did this shot.
+   - For "color_palette" panels: describe an ABSTRACT color-field image, NOT a scene. E.g. "Abstract fog of crimson bleeding into charcoal, painterly texture, no figures, no text." Think Rothko, not narrative.
+   - For "lighting": can be a scene but lighting must be the subject (ratio, motivated source, contrast)
+   - For "costume" / "production design" / "location": favor photoreal, tactile, single focal subject
+   - ALWAYS end with: "No text, no logos, no watermarks, photorealistic, 35mm film grain."
+   - NEVER reference living celebrities, real brands, or copyrighted IP
+
+CRAFT RULES:
+- Every prompt must pass the "could I storyboard off this" test — specific enough to shoot.
+- Vary angle, lens, time of day, and density across the 10 panels so the board has rhythm.
+- Color palette panels are abstract color fields. Other panels are photoreal.
+- DO NOT produce any prompt that could surface a person's face as a celebrity likeness — use descriptive features, not names.
+- Keep prompts safe for DALL-E content policy: no gore, no minors in peril, no explicit content.
+
+Return ONLY JSON matching the schema.
+`.trim();
+
+  const res = await callOpenAIJsonSchema<VisionBoard>(
+    prompt,
+    buildVisionBoardSchema(),
+    {
+      temperature: 0.7,
+      max_tokens: 4500,
+      request_tag: "vision-board",
+      schema_name: "VisionBoard",
+      model: MODEL_JSON_RAW,
+    },
+  );
+
+  if (!res.data) return null;
+  return { ...res.data, generatedAt: Date.now() };
 };

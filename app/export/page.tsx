@@ -9,7 +9,9 @@ import {
   Package,
   Share,
   Loader2,
+  Feather,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -27,8 +29,8 @@ const exportOptions: ExportOption[] = [
   {
     id: "script",
     name: "Script Export",
-    description: "Export screenplay as text file in Fountain format",
-    format: "TXT",
+    description: "Screenplay as .txt, .fountain, and Final Draft .fdx — all three formats bundled.",
+    format: "TXT + FDX + Fountain",
     size: "0.5-2 MB",
   },
   {
@@ -67,11 +69,53 @@ const exportOptions: ExportOption[] = [
     size: "0.1-1 MB",
   },
   {
+    id: "coverage",
+    name: "Script Coverage",
+    description: "Professional coverage report — structure, dialogue, marketability, verdict",
+    format: "JSON",
+    size: "0.1-0.5 MB",
+  },
+  {
+    id: "shotlist",
+    name: "Shot List",
+    description: "Full shot breakdown with sizes, angles, movement, lens, and equipment",
+    format: "JSON",
+    size: "0.1-1 MB",
+  },
+  {
+    id: "pitch-deck",
+    name: "Pitch Deck Assets",
+    description: "Director's statement, visual approach, and personal connection for the pitch",
+    format: "JSON",
+    size: "0.1 MB",
+  },
+  {
+    id: "vision-board",
+    name: "Vision Board",
+    description: "Director's lookbook panels and all generated reference images",
+    format: "ZIP",
+    size: "5-25 MB",
+  },
+  {
+    id: "social",
+    name: "Social Package",
+    description: "Platform-ready captions, threads, hooks, and hashtag sets",
+    format: "JSON",
+    size: "0.1 MB",
+  },
+  {
+    id: "distribution",
+    name: "Distribution Strategy",
+    description: "Festival circuit, platform pitch notes, release timeline",
+    format: "JSON",
+    size: "0.1 MB",
+  },
+  {
     id: "complete",
     name: "Complete Package",
-    description: "Everything in one comprehensive export with all images",
+    description: "Everything in one comprehensive export with all images and JSONs",
     format: "ZIP",
-    size: "20-100 MB",
+    size: "20-120 MB",
   },
 ];
 
@@ -91,12 +135,12 @@ export default function ExportPage() {
 
   const runExport = async (options: string[]) => {
     if (options.length === 0) {
-      alert("Please select at least one export option.");
+      toast.error("Please select at least one export option.");
       return;
     }
 
     if (!filmPackage) {
-      alert("No film package data available. Please generate content first.");
+      toast.error("No film package data available. Please generate content first.");
       return;
     }
 
@@ -129,7 +173,7 @@ export default function ExportPage() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      alert("Export completed successfully!");
+      toast.success("Export completed successfully");
     } catch (error: any) {
       console.error("Export failed:", error);
       setError("Export failed. Please try again.");
@@ -145,6 +189,52 @@ export default function ExportPage() {
   const handleQuickExport = async (optionId: string) => {
     setSelectedOptions([optionId]);
     await runExport([optionId]);
+  };
+
+  const handleScreenplayExport = async (format: "fdx" | "fountain") => {
+    if (!filmPackage?.script) {
+      toast.error("Generate a script first before exporting.");
+      return;
+    }
+    setIsExporting(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filmPackage, format }),
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to export ${format.toUpperCase()}.`);
+      }
+      const blob = await res.blob();
+      const slug = (filmPackage.idea || "screenplay")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "")
+        .slice(0, 48) || "screenplay";
+      const ext = format === "fdx" ? "fdx" : "fountain";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${slug}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success(
+        format === "fdx"
+          ? "Final Draft (.fdx) exported. Open it in Final Draft 10+."
+          : "Fountain (.fountain) exported.",
+      );
+    } catch (err: any) {
+      console.error("Screenplay export failed:", err);
+      setError(err?.message || "Screenplay export failed. Please try again.");
+      toast.error(err?.message || "Screenplay export failed.");
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   // Estimate total size
@@ -294,6 +384,37 @@ export default function ExportPage() {
                 </Button>
               </Card>
 
+              {/* Pro Screenplay Export */}
+              <Card className="glass-effect border-[#FF6A00]/20 p-6">
+                <div className="flex items-center gap-2 mb-2">
+                  <Feather className="w-4 h-4 text-[#7AE2CF]" />
+                  <h3 className="text-lg font-semibold text-white">Pro Screenplay</h3>
+                </div>
+                <p className="text-xs text-[#8da3a4] mb-4">
+                  Single-file downloads for professional tools.
+                </p>
+                <div className="space-y-3">
+                  <Button
+                    variant="outline"
+                    disabled={isExporting || !filmPackage?.script}
+                    className="w-full justify-start border-[#FF6A00]/30 text-[#FF6A00] hover:bg-[#FF6A00] hover:text-white"
+                    onClick={() => handleScreenplayExport("fdx")}
+                  >
+                    <FileText className="w-4 h-4 mr-2" />
+                    Final Draft (.fdx)
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={isExporting || !filmPackage?.script}
+                    className="w-full justify-start border-[#7AE2CF]/30 text-[#7AE2CF] hover:bg-[#7AE2CF] hover:text-[#091416]"
+                    onClick={() => handleScreenplayExport("fountain")}
+                  >
+                    <Feather className="w-4 h-4 mr-2" />
+                    Fountain (.fountain)
+                  </Button>
+                </div>
+              </Card>
+
               {/* Quick Export */}
               <Card className="glass-effect border-[#FF6A00]/20 p-6">
                 <h3 className="text-lg font-semibold text-white mb-4">
@@ -308,7 +429,7 @@ export default function ExportPage() {
                     onClick={() => handleQuickExport("script")}
                   >
                     <FileText className="w-4 h-4 mr-2" />
-                    Script PDF
+                    Script Bundle (ZIP)
                   </Button>
                   <Button
                     variant="outline"

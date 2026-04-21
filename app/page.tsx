@@ -35,6 +35,18 @@ const scriptLengthOptions: ScriptLengthOption[] = [
   { label: "120 min (Full Feature)", value: "120 min", isPro: true },
 ];
 
+const generationSteps: { label: string; duration: number }[] = [
+  { label: "Developing your story concept", duration: 5000 },
+  { label: "Writing your screenplay", duration: 45000 },
+  { label: "Profiling your characters", duration: 15000 },
+  { label: "Designing your storyboard", duration: 15000 },
+  { label: "Building your budget", duration: 8000 },
+  { label: "Scheduling production days", duration: 8000 },
+  { label: "Scouting locations", duration: 8000 },
+  { label: "Composing your soundscape", duration: 12000 },
+  { label: "Finalizing your film package", duration: 10000 },
+];
+
 const genreList: string[] = [
   "Action",
   "Adventure",
@@ -89,6 +101,8 @@ export default function HomePage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
+  const [loadingStep, setLoadingStep] = useState(0);
+  const [loadingProgress, setLoadingProgress] = useState(0);
   const [showLengthDropdown, setShowLengthDropdown] = useState(false);
   const [showGenreDropdown, setShowGenreDropdown] = useState(false);
   const [isSubscribed, setIsSubscribed] = useState(false);
@@ -136,6 +150,39 @@ export default function HomePage() {
       window.removeEventListener("click", handleClickOutside);
     };
   }, [showLengthDropdown, showGenreDropdown]);
+
+  // Multi-step progress during generation
+  useEffect(() => {
+    if (!loading) {
+      setLoadingStep(0);
+      setLoadingProgress(0);
+      return;
+    }
+
+    const totalDuration = generationSteps.reduce((s, step) => s + step.duration, 0);
+    const startTime = Date.now();
+
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      // Advance step index based on accumulated durations
+      let acc = 0;
+      let idx = generationSteps.length - 1;
+      for (let i = 0; i < generationSteps.length; i++) {
+        acc += generationSteps[i].duration;
+        if (elapsed < acc) {
+          idx = i;
+          break;
+        }
+      }
+      setLoadingStep(idx);
+      setLoadingMessage(generationSteps[idx].label);
+      // Progress never quite reaches 100% — the real response completes it
+      const pct = Math.min(97, Math.round((elapsed / totalDuration) * 100));
+      setLoadingProgress(pct);
+    }, 400);
+
+    return () => clearInterval(interval);
+  }, [loading]);
 
   const handleProLengthClick = (option: ScriptLengthOption) => {
     // Close dropdown so the UI doesn't look "stuck"
@@ -486,8 +533,59 @@ export default function HomePage() {
                 </div>
               )}
 
-              {loading && loadingMessage && (
-                <div className={cn("text-[#B2C8C9] text-center")}>{loadingMessage}</div>
+              {loading && (
+                <div className="space-y-4 rounded-xl border border-[#FF6A00]/20 bg-[#0b1b1d]/60 p-5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <Loader2 className="w-5 h-5 text-[#FF6A00] animate-spin" />
+                      <span className="text-white font-medium">
+                        {loadingMessage || "Preparing your film..."}
+                      </span>
+                    </div>
+                    <span className="text-[#FF6A00] font-semibold text-sm tabular-nums">
+                      {loadingProgress}%
+                    </span>
+                  </div>
+
+                  <div className="h-2 w-full rounded-full bg-[#032f30] overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-[#FF6A00] to-[#ffb366] transition-all duration-300 ease-out"
+                      style={{ width: `${loadingProgress}%` }}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    {generationSteps.map((step, i) => {
+                      const isDone = i < loadingStep;
+                      const isActive = i === loadingStep;
+                      return (
+                        <div
+                          key={step.label}
+                          className={cn(
+                            "flex items-center gap-2 rounded-md px-2 py-1.5 transition-colors",
+                            isDone && "text-[#ffb366]",
+                            isActive && "text-white bg-[#FF6A00]/10",
+                            !isDone && !isActive && "text-[#8da3a4]"
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "inline-block w-1.5 h-1.5 rounded-full",
+                              isDone && "bg-[#ffb366]",
+                              isActive && "bg-[#FF6A00] animate-pulse",
+                              !isDone && !isActive && "bg-[#2a4042]"
+                            )}
+                          />
+                          <span className="truncate">{step.label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <p className="text-[#8da3a4] text-xs text-center">
+                    This takes 30–120 seconds depending on script length. Stay on this tab.
+                  </p>
+                </div>
               )}
             </div>
           </Card>

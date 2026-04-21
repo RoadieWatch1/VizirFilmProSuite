@@ -1,13 +1,16 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Users, Plus, User, Loader2, Download } from "lucide-react";
+import { Users, Plus, User, Loader2, Download, Star, ChevronDown, ChevronUp, Sparkles } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import EmptyState from "@/components/EmptyState";
 import { useFilmStore } from "@/lib/store";
+import type { CharacterCasting, CastingSuggestion } from "@/lib/generators";
 
 interface Character {
   name: string;
@@ -20,6 +23,109 @@ interface Character {
   mood?: string;
   visualDescription?: string;
   imageUrl?: string;
+  casting?: CharacterCasting;
+}
+
+const TIER_META: Array<{
+  key: keyof Pick<CharacterCasting, "aList" | "midTier" | "emerging" | "characterActors">;
+  label: string;
+  tag: string;
+  accent: string;
+  ring: string;
+  bg: string;
+}> = [
+  {
+    key: "aList",
+    label: "A-List",
+    tag: "Aspirational",
+    accent: "text-[#FF6A00]",
+    ring: "border-[#FF6A00]/35",
+    bg: "bg-[#FF6A00]/10",
+  },
+  {
+    key: "midTier",
+    label: "Mid-Tier",
+    tag: "Realistic",
+    accent: "text-[#7AE2CF]",
+    ring: "border-[#7AE2CF]/35",
+    bg: "bg-[#7AE2CF]/10",
+  },
+  {
+    key: "emerging",
+    label: "Emerging",
+    tag: "Indie-friendly",
+    accent: "text-[#E8ECF0]",
+    ring: "border-[rgba(255,255,255,0.15)]",
+    bg: "bg-[rgba(255,255,255,0.04)]",
+  },
+  {
+    key: "characterActors",
+    label: "Character Actors",
+    tag: "Scene-stealers",
+    accent: "text-[#D4DEE0]",
+    ring: "border-[rgba(255,255,255,0.12)]",
+    bg: "bg-[rgba(255,255,255,0.03)]",
+  },
+];
+
+function SuggestionRow({ s }: { s: CastingSuggestion }) {
+  return (
+    <div className="p-3 rounded-md bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)] space-y-1">
+      <div className="flex items-start justify-between gap-2">
+        <div className="text-sm font-semibold text-[#E8ECF0] leading-tight">{s.name}</div>
+        {s.notableWork && (
+          <div className="text-[11px] text-[#7AE2CF]/90 italic shrink-0">{s.notableWork}</div>
+        )}
+      </div>
+      {s.reason && (
+        <div className="text-xs text-[#B2C8C9] leading-snug">{s.reason}</div>
+      )}
+    </div>
+  );
+}
+
+function CastingAccordion({ casting }: { casting: CharacterCasting }) {
+  const [openTier, setOpenTier] = useState<string | null>("aList");
+  return (
+    <div className="space-y-2">
+      {casting.notes && (
+        <p className="text-xs text-[#A8BFC1] leading-snug italic border-l-2 border-[#FF6A00]/40 pl-3">
+          {casting.notes}
+        </p>
+      )}
+      {TIER_META.map(({ key, label, tag, accent, ring, bg }) => {
+        const items = (casting[key] || []) as CastingSuggestion[];
+        if (!items.length) return null;
+        const isOpen = openTier === key;
+        return (
+          <div key={key} className={`rounded-lg border ${ring} ${bg}`}>
+            <button
+              type="button"
+              onClick={() => setOpenTier(isOpen ? null : key)}
+              className="w-full flex items-center justify-between px-3 py-2 text-left"
+            >
+              <div className="flex items-center gap-2">
+                <Star className={`w-3.5 h-3.5 ${accent}`} />
+                <span className={`text-sm font-semibold ${accent}`}>{label}</span>
+                <span className="text-[10px] uppercase tracking-wider text-[#6E8B8D]">{tag}</span>
+                <span className="text-[11px] text-[#6E8B8D]">· {items.length}</span>
+              </div>
+              {isOpen ? (
+                <ChevronUp className="w-4 h-4 text-[#6E8B8D]" />
+              ) : (
+                <ChevronDown className="w-4 h-4 text-[#6E8B8D]" />
+              )}
+            </button>
+            {isOpen && (
+              <div className="px-3 pb-3 space-y-2">
+                {items.map((s, i) => <SuggestionRow key={i} s={s} />)}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function CharactersPage() {
@@ -27,6 +133,7 @@ export default function CharactersPage() {
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [castingLoadingIndex, setCastingLoadingIndex] = useState<number | null>(null);
 
   const [newCharacter, setNewCharacter] = useState<Character>({
     name: "",
@@ -48,7 +155,7 @@ export default function CharactersPage() {
 
   const handleAddCharacter = () => {
     if (!newCharacter.name.trim() || !newCharacter.description.trim()) {
-      alert("Character name and description are required.");
+      toast.error("Character name and description are required.");
       return;
     }
 
@@ -69,7 +176,7 @@ export default function CharactersPage() {
 
   const handleGenerateCharacters = async () => {
     if (!filmPackage?.script || !filmPackage?.genre) {
-      alert("Please generate a script first from the Create tab.");
+      toast.error("Please generate a script first from the Create tab.");
       return;
     }
 
@@ -98,7 +205,7 @@ export default function CharactersPage() {
       const data = await res.json();
       console.log("Received characters from API:", data.characters);
       updateFilmPackage({ characters: data.characters || [] });
-      alert("Characters generated successfully!");
+      toast.success("Characters generated successfully");
     } catch (error) {
       console.error("Failed to generate characters:", error);
       setError("Failed to generate characters. Please try again.");
@@ -109,7 +216,7 @@ export default function CharactersPage() {
 
   const handleGeneratePortrait = async (character: Character, index: number) => {
     if (!character.name || !character.description) {
-      alert("Character name and description are required for generating a portrait.");
+      toast.error("Character name and description are required for generating a portrait.");
       return;
     }
 
@@ -153,9 +260,59 @@ export default function CharactersPage() {
     }
   };
 
+  const handleGenerateCasting = async (character: Character, index: number) => {
+    if (!character.name || !character.description) {
+      toast.error("Character name and description are required.");
+      return;
+    }
+    setCastingLoadingIndex(index);
+    setError(null);
+    try {
+      const res = await fetch("/api/characters", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          step: "generate-casting",
+          character,
+          genre: filmPackage?.genre || "",
+          title: filmPackage?.idea || "",
+          logline: filmPackage?.logline || "",
+          synopsis: filmPackage?.synopsis || "",
+          themes: filmPackage?.themes || [],
+        }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        setError(errorData.error || "Failed to generate casting suggestions.");
+        toast.error(errorData.error || "Failed to generate casting suggestions.");
+        return;
+      }
+
+      const data = await res.json();
+      const casting = data?.casting as CharacterCasting | undefined;
+      if (!casting) {
+        toast.error("Casting generation returned no data.");
+        return;
+      }
+      const updated = [...characters];
+      updated[index] = {
+        ...character,
+        casting: { ...casting, generatedAt: Date.now() },
+      };
+      updateFilmPackage({ characters: updated });
+      toast.success(`Casting suggestions ready for ${character.name}`);
+    } catch (err: any) {
+      console.error("Casting generation failed:", err);
+      setError("Failed to generate casting. Please try again.");
+    } finally {
+      setCastingLoadingIndex(null);
+    }
+  };
+
   const handleDownloadCharacters = async () => {
     if (characters.length === 0) {
-      alert("No characters to download.");
+      toast.error("No characters to download.");
       return;
     }
 
@@ -186,7 +343,7 @@ export default function CharactersPage() {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
 
-      alert("✅ Character package downloaded successfully!");
+      toast.success("Character package downloaded successfully");
     } catch (error: any) {
       console.error("Failed to download characters:", error);
       setError("Failed to download character package. Please try again.");
@@ -298,44 +455,28 @@ export default function CharactersPage() {
   );
 
   if (characters.length === 0) {
+    const hasScript = !!filmPackage?.script;
     return (
-      <div className="min-h-screen cinematic-gradient">
-        <div className="container mx-auto px-4 py-12">
-          <div className="max-w-4xl mx-auto">
-            <div className="text-center mb-8">
-              <Users className="w-16 h-16 text-[#FF6A00] mx-auto mb-4" />
-              <h1 className="text-3xl font-bold text-white mb-2">
-                Character Development
-              </h1>
-              <p className="text-[#B2C8C9]">
-                Create and manage your film's characters
-              </p>
-            </div>
-            {error && (
-              <div className="text-red-400 text-center p-3 bg-red-400/10 rounded-lg mb-4">
-                {error}
-              </div>
-            )}
-            <div className="flex justify-center mb-8">
-              <Button
-                onClick={handleGenerateCharacters}
-                disabled={loading}
-                className="bg-[#FF6A00] hover:bg-[#E55A00] text-white"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                    Generating...
-                  </>
-                ) : (
-                  "Generate Characters"
-                )}
-              </Button>
-            </div>
+      <>
+        <EmptyState
+          icon={Users}
+          title="Character Development"
+          subtitle="Build rich, visually distinct characters for your film"
+          emptyTitle="No characters yet"
+          emptyDescription="Generate character profiles from your script — each with a role, traits, visual description, color palette, and AI portrait."
+          needsPrerequisite={!hasScript}
+          prerequisiteMessage="Generate a script first so characters can be extracted and profiled from your story."
+          actionLabel="Generate Characters"
+          actionLoadingLabel="Profiling characters..."
+          onAction={handleGenerateCharacters}
+          loading={loading}
+        />
+        {hasScript && (
+          <div className="container mx-auto px-4 pb-12 max-w-4xl">
             {renderCharacterForm()}
           </div>
-        </div>
-      </div>
+        )}
+      </>
     );
   }
 
@@ -485,6 +626,34 @@ export default function CharactersPage() {
                     "Generate Portrait"
                   )}
                 </Button>
+
+                <Button
+                  onClick={() => handleGenerateCasting(character, index)}
+                  disabled={castingLoadingIndex !== null}
+                  variant="outline"
+                  className="bg-transparent border-[#FF6A00]/30 text-[#FF6A00] hover:bg-[#FF6A00]/10 hover:text-[#FF6A00] w-full"
+                >
+                  {castingLoadingIndex === index ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Casting...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 mr-2" />
+                      {character.casting ? "Regenerate Casting" : "Generate Casting"}
+                    </>
+                  )}
+                </Button>
+
+                {character.casting && (
+                  <div className="pt-2 mt-1 border-t border-[rgba(255,255,255,0.06)]">
+                    <div className="text-[11px] uppercase tracking-wider text-[#6E8B8D] mb-2">
+                      Casting Suggestions
+                    </div>
+                    <CastingAccordion casting={character.casting} />
+                  </div>
+                )}
               </Card>
             ))}
           </div>

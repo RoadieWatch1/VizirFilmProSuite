@@ -8,6 +8,7 @@ import {
   Palette,
   Loader2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useFilmStore } from "@/lib/store";
@@ -67,7 +68,7 @@ export default function ConceptPage() {
 
   const handleGenerateConcept = async () => {
     if (!filmPackage?.script || !filmPackage?.genre) {
-      alert("Please generate a script first from the Create tab.");
+      toast.error("Please generate a script first from the Create tab.");
       return;
     }
 

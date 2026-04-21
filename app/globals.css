@@ -121,6 +121,29 @@
   @apply text-base md:text-lg leading-relaxed text-[#E8ECF0] font-mono;
 }
 
+/* ── Professional screenplay editor (Courier-style, industry format) ── */
+.screenplay-editor {
+  font-family: var(--font-courier-prime), "Courier Prime", "Courier New", "Courier", ui-monospace, monospace;
+  font-size: 12pt;
+  line-height: 1.55;
+  letter-spacing: 0.01em;
+  color: #E8ECF0;
+  background: #0b1b1d;
+  padding: 1.25rem 1.5rem;
+  border-radius: 0.5rem;
+  tab-size: 4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.screenplay-editor::placeholder {
+  color: #6E8B8D;
+  font-style: italic;
+}
+.screenplay-editor:focus-visible {
+  outline: 1px solid rgba(255, 106, 0, 0.35);
+  outline-offset: 2px;
+}
+
 /* ── CTA button lift ── */
 .button-transition {
   transition: all 0.2s cubic-bezier(0.33, 1, 0.68, 1);

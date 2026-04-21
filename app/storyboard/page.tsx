@@ -15,9 +15,11 @@ import {
   ArrowRight,
   Download,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import EmptyState from "@/components/EmptyState";
 import { useFilmStore } from "@/lib/store";
 
 import type { StoryboardFrame } from "@/lib/generators";
@@ -97,11 +99,11 @@ export default function StoryboardPage() {
 
   const handleGenerateStoryboard = async () => {
     if (!filmPackage?.idea || !filmPackage?.genre) {
-      alert("Please generate a film package first from the Create tab.");
+      toast.error("Please generate a film package first from the Create tab.");
       return;
     }
     if (storyboard.length > 0) {
-      alert("Storyboard has already been generated for this script.");
+      toast.info("Storyboard has already been generated for this script.");
       return;
     }
     setLoading(true);
@@ -121,7 +123,7 @@ export default function StoryboardPage() {
       if (!res.ok) {
         const errorData = await res.json();
         console.error(errorData);
-        alert("Failed to generate storyboard.");
+        toast.error("Failed to generate storyboard.");
         return;
       }
       const data = await res.json();
@@ -133,7 +135,7 @@ export default function StoryboardPage() {
       updateFilmPackage({ storyboard: frames });
     } catch (error) {
       console.error("Failed to generate storyboard:", error);
-      alert("An error occurred while generating the storyboard.");
+      toast.error("An error occurred while generating the storyboard.");
     } finally {
       setLoading(false);
     }
@@ -158,7 +160,7 @@ export default function StoryboardPage() {
       });
       if (!res.ok) {
         const err = await res.json();
-        alert(err.error || "Failed to generate image.");
+        toast.error(err.error || "Failed to generate image.");
         return;
       }
       const data = await res.json();
@@ -170,7 +172,7 @@ export default function StoryboardPage() {
       }
     } catch (error) {
       console.error("Image generation error:", error);
-      alert("Failed to generate image.");
+      toast.error("Failed to generate image.");
     } finally {
       setGeneratingImages((prev) => {
         const next = new Set(prev);
@@ -198,7 +200,7 @@ export default function StoryboardPage() {
       });
       if (!res.ok) {
         const err = await res.json();
-        alert(err.error || "Failed to generate coverage image.");
+        toast.error(err.error || "Failed to generate coverage image.");
         return;
       }
       const data = await res.json();
@@ -212,7 +214,7 @@ export default function StoryboardPage() {
       }
     } catch (error) {
       console.error("Coverage image generation error:", error);
-      alert("Failed to generate coverage image.");
+      toast.error("Failed to generate coverage image.");
     } finally {
       setGeneratingCoverage((prev) => {
         const next = new Set(prev);
@@ -233,7 +235,7 @@ export default function StoryboardPage() {
       });
       if (!res.ok) {
         const err = await res.json();
-        alert(err.error || "Failed to download storyboard.");
+        toast.error(err.error || "Failed to download storyboard.");
         return;
       }
       const blob = await res.blob();
@@ -247,7 +249,7 @@ export default function StoryboardPage() {
       document.body.removeChild(a);
     } catch (error) {
       console.error("Storyboard download error:", error);
-      alert("Failed to download storyboard package.");
+      toast.error("Failed to download storyboard package.");
     } finally {
       setDownloading(false);
     }
@@ -267,44 +269,21 @@ export default function StoryboardPage() {
 
   // --- Empty state ---
   if (storyboard.length === 0) {
+    const hasPrereqs = !!(filmPackage?.idea && filmPackage?.genre);
     return (
-      <div className="min-h-screen cinematic-gradient">
-        <div className="container mx-auto px-4 py-12">
-          <div className="max-w-4xl mx-auto">
-            <div className="text-center mb-8">
-              <LucideImage className="w-16 h-16 text-[#FF6A00] mx-auto mb-4" />
-              <h1 className="text-3xl font-bold text-white mb-2">
-                Storyboard
-              </h1>
-              <p className="text-[#B2C8C9]">
-                Professional shot-by-shot storyboard with B&W pencil sketches
-              </p>
-            </div>
-            <Card className="glass-effect border-[#FF6A00]/20 p-8 text-center">
-              <h3 className="text-xl font-semibold text-white mb-4">
-                No Storyboard Yet
-              </h3>
-              <p className="text-[#B2C8C9] mb-6">
-                Generate a professional storyboard from your script with detailed shot information, camera specs, and B&W pencil sketch images.
-              </p>
-              <Button
-                onClick={handleGenerateStoryboard}
-                disabled={loading}
-                className="bg-[#FF6A00] hover:bg-[#E55A00] text-white"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Generating Storyboard...
-                  </>
-                ) : (
-                  "Generate Storyboard"
-                )}
-              </Button>
-            </Card>
-          </div>
-        </div>
-      </div>
+      <EmptyState
+        icon={LucideImage}
+        title="Storyboard"
+        subtitle="Professional shot-by-shot storyboard with B&W pencil sketches"
+        emptyTitle="No storyboard yet"
+        emptyDescription="Generate a cinematic storyboard with detailed shot sizes, camera angles, lens choices, lighting notes, and hand-drawn pencil sketch frames."
+        needsPrerequisite={!hasPrereqs}
+        prerequisiteMessage="Enter your film idea and genre on the Create tab so shots can be designed for your story."
+        actionLabel="Generate Storyboard"
+        actionLoadingLabel="Designing shots..."
+        onAction={handleGenerateStoryboard}
+        loading={loading}
+      />
     );
   }
 

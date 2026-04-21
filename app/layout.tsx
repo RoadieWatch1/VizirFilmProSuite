@@ -2,8 +2,10 @@
 
 import './globals.css';
 import type { Metadata } from 'next';
-import { Inter, Roboto_Mono } from 'next/font/google';
+import { Inter, Roboto_Mono, Courier_Prime } from 'next/font/google';
+import { Toaster } from 'sonner';
 import Navigation from '@/components/Navigation';
+import ProjectSync from '@/components/ProjectSync';
 import { AuthProvider } from '@/lib/useAuth';
 
 const inter = Inter({
@@ -18,6 +20,13 @@ const robotoMono = Roboto_Mono({
   weight: ['400', '500'],
   display: 'swap',
   variable: '--font-roboto-mono',
+});
+
+const courierPrime = Courier_Prime({
+  subsets: ['latin'],
+  weight: ['400', '700'],
+  display: 'swap',
+  variable: '--font-courier-prime',
 });
 
 export const metadata: Metadata = {
@@ -51,11 +60,25 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${inter.variable} ${robotoMono.variable}`}>
+    <html lang="en" className={`${inter.variable} ${robotoMono.variable} ${courierPrime.variable}`}>
       <body className="font-sans min-h-screen bg-[#091416] text-[#E8ECF0] antialiased">
         <AuthProvider>
+          <ProjectSync />
           <Navigation />
           <main className="min-h-screen">{children}</main>
+          <Toaster
+            position="top-right"
+            theme="dark"
+            richColors
+            closeButton
+            toastOptions={{
+              style: {
+                background: '#0b1b1d',
+                border: '1px solid rgba(255, 106, 0, 0.25)',
+                color: '#E8ECF0',
+              },
+            }}
+          />
         </AuthProvider>
       </body>
     </html>

@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { MapPin, Plus, Loader2, Palette } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { MapPin, Palette } from "lucide-react";
+import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import EmptyState from "@/components/EmptyState";
 import { useFilmStore } from "@/lib/store";
 
 export default function LocationsPage() {
@@ -13,7 +14,7 @@ export default function LocationsPage() {
 
   const handleGenerateLocations = async () => {
     if (!filmPackage?.script || !filmPackage?.genre) {
-      alert("Please generate a script first from the Create tab.");
+      toast.error("Please generate a script first from the Create tab.");
       return;
     }
 
@@ -33,7 +34,7 @@ export default function LocationsPage() {
       if (!res.ok) {
         const errorData = await res.json();
         console.error(errorData);
-        alert("Failed to generate locations.");
+        toast.error("Failed to generate locations.");
         return;
       }
 
@@ -45,7 +46,7 @@ export default function LocationsPage() {
       });
     } catch (error) {
       console.error("Failed to generate locations:", error);
-      alert("An error occurred while generating locations.");
+      toast.error("An error occurred while generating locations.");
     } finally {
       setLoading(false);
     }
@@ -54,47 +55,21 @@ export default function LocationsPage() {
   const locations = filmPackage?.locations || [];
 
   if (locations.length === 0) {
+    const hasScript = !!filmPackage?.script;
     return (
-      <div className="min-h-screen cinematic-gradient">
-        <div className="container mx-auto px-4 py-12">
-          <div className="max-w-4xl mx-auto">
-            <div className="text-center mb-8">
-              <MapPin className="w-16 h-16 text-[#FF6A00] mx-auto mb-4" />
-              <h1 className="text-3xl font-bold text-white mb-2">
-                Location Management
-              </h1>
-              <p className="text-[#B2C8C9]">
-                Scout and manage filming locations
-              </p>
-            </div>
-
-            <Card className="glass-effect border-[#FF6A00]/20 p-8 text-center">
-              <h3 className="text-xl font-semibold text-white mb-4">
-                No Locations Yet
-              </h3>
-              <p className="text-[#B2C8C9] mb-6">
-                Generate professional location suggestions based on your script
-              </p>
-              <div className="flex justify-center">
-                <Button
-                  onClick={handleGenerateLocations}
-                  disabled={loading}
-                  className="bg-[#FF6A00] hover:bg-[#E55A00] text-white"
-                >
-                  {loading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Generating...
-                    </>
-                  ) : (
-                    "Generate Locations"
-                  )}
-                </Button>
-              </div>
-            </Card>
-          </div>
-        </div>
-      </div>
+      <EmptyState
+        icon={MapPin}
+        title="Locations"
+        subtitle="Scout and curate filming locations tailored to your story"
+        emptyTitle="No locations yet"
+        emptyDescription="Generate script-specific location suggestions with moods, color palettes, budget tips, and high-budget opportunities for every scene."
+        needsPrerequisite={!hasScript}
+        prerequisiteMessage="Generate a script first so locations can be matched to your scenes."
+        actionLabel="Generate Locations"
+        actionLoadingLabel="Scouting locations..."
+        onAction={handleGenerateLocations}
+        loading={loading}
+      />
     );
   }
 
